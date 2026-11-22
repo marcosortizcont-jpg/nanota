@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0f1115">
+<title>NaNota — notas e acordes em tempo real</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0f1115;--panel:#171a21;--panel2:#1e222b;--line:#272c37;--text:#ebe8e3;--muted:#8d95a5;--chord:#f5b43c;--accent:#f5b43c;--sec:#7cc4ff;--ok:#5fd39a;--bad:#ff6b6b}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:'Space Grotesk',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+body{padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+.wrap{max-width:760px;margin:0 auto;padding:16px 16px 40px;display:flex;flex-direction:column;gap:12px}
+header{display:flex;align-items:center;gap:10px}
+.logo{font-weight:700;font-size:19px;display:flex;align-items:center;gap:8px}
+.logo i{width:22px;height:22px;border-radius:6px;background:var(--accent);color:#1a1300;display:grid;place-items:center;font-style:normal;font-family:'JetBrains Mono',monospace;font-size:13px}
+.st{margin-left:auto;font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px}
+.st b{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+.st.on b{background:var(--bad);animation:pulse 1.2s infinite}
+@keyframes pulse{50%{opacity:.35}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px}
+.lab{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted)}
+.big{text-align:center;padding:22px 16px 18px}
+#chord{font-family:'JetBrains Mono',monospace;font-weight:700;font-size:clamp(72px,24vw,150px);line-height:1;color:var(--chord);min-height:1em;transition:color .15s}
+#chord.dim{color:var(--line)}
+#notes{margin-top:10px;font-family:'JetBrains Mono',monospace;color:var(--muted);font-size:16px;min-height:1.3em}
+#notes span{color:var(--text);margin:0 4px}
+#conf{height:4px;border-radius:9px;background:var(--panel2);margin:14px auto 0;max-width:260px;overflow:hidden}
+#conf i{display:block;height:100%;width:0;background:var(--accent);transition:width .1s}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.note{font-family:'JetBrains Mono',monospace;font-size:44px;font-weight:700;line-height:1.1}
+.note sub{font-size:16px;color:var(--muted);vertical-align:baseline}
+.hz{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted)}
+.tuner{position:relative;height:26px;margin-top:8px;border-radius:8px;background:var(--panel2);overflow:hidden}
+.tuner:before{content:'';position:absolute;left:50%;top:0;bottom:0;width:2px;background:var(--ok);opacity:.6}
+.tuner i{position:absolute;top:3px;bottom:3px;width:6px;margin-left:-3px;left:50%;border-radius:3px;background:var(--text);transition:left .08s}
+.tuner.in i{background:var(--ok)}
+.cents{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted);margin-top:4px;display:flex;justify-content:space-between}
+#key{font-family:'JetBrains Mono',monospace;font-size:40px;font-weight:700;color:var(--sec);line-height:1.15}
+.meter{height:8px;border-radius:9px;background:var(--panel2);overflow:hidden;position:relative}
+.meter i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--ok),var(--accent),var(--bad))}
+.meter u{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--text);opacity:.7}
+.ctl{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button{font:inherit;color:inherit;cursor:pointer;border:1px solid var(--line);background:var(--panel2);border-radius:12px;padding:11px 16px;font-weight:500}
+button.pri{background:var(--accent);border-color:var(--accent);color:#1a1300;font-weight:700;font-size:17px;padding:14px 22px}
+button.on{background:var(--accent);color:#1a1300;border-color:var(--accent)}
+button:disabled{opacity:.4}
+.sl{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--muted);flex:1;min-width:220px}
+input[type=range]{flex:1;accent-color:var(--accent)}
+#hist{display:flex;flex-wrap:wrap;gap:6px;max-height:220px;overflow:auto}
+#hist span{font-family:'JetBrains Mono',monospace;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:5px 9px;display:flex;flex-direction:column;min-width:56px}
+#hist span b{color:var(--chord);font-size:16px}
+#hist span small{color:var(--muted);font-size:10px}
+#hist span.new{border-color:var(--accent)}
+.empty{color:var(--muted);font-size:14px}
+.msg{font-size:14px;line-height:1.5;padding:12px 14px;border-radius:12px;background:color-mix(in srgb,var(--bad) 12%,transparent);border:1px solid color-mix(in srgb,var(--bad) 40%,transparent);display:none}
+.tip{font-size:13px;color:var(--muted);line-height:1.5}
+.toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:var(--text);color:var(--bg);padding:10px 16px;border-radius:10px;font-size:14px;z-index:9}
+textarea{width:100%;min-height:120px;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:10px;font-family:'JetBrains Mono',monospace;font-size:13px;display:none}
+@media (max-width:520px){.row{grid-template-columns:1fr 1fr}.note{font-size:34px}#key{font-size:30px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><div class="logo"><i>♯</i>NaNota</div><div class="st" id="st"><b></b><span>Microfone desligado</span></div></header>
+
+  <div class="msg" id="msg"></div>
+
+  <div class="card big">
+    <div class="lab">Acorde agora</div>
+    <div id="chord" class="dim">—</div>
+    <div id="notes">Toque <b>Ligar microfone</b> e comece a tocar</div>
+    <div id="conf"><i></i></div>
+  </div>
+
+  <div class="row">
+    <div class="card">
+      <div class="lab">Nota mais forte</div>
+      <div class="note" id="note">—</div>
+      <div class="hz" id="hz">&nbsp;</div>
+      <div class="tuner" id="tuner"><i id="needle"></i></div>
+      <div class="cents"><span>−50</span><span id="cents">afinação</span><span>+50</span></div>
+    </div>
+    <div class="card">
+      <div class="lab">Tom provável</div>
+      <div id="key">—</div>
+      <div class="hz" id="keyInfo">ouvindo…</div>
+    </div>
+  </div>
+
+  <div class="card" style="display:flex;flex-direction:column;gap:12px">
+    <div class="ctl">
+      <button class="pri" id="btnMic">🎤 Ligar microfone</button>
+      <button id="btnAcc" title="Sustenidos ou bemóis">♯ / ♭</button>
+      <button id="btn7" title="Detectar também acordes com sétima">Com 7ª</button>
+    </div>
+    <div class="sl">Sensibilidade <input type="range" id="sens" min="1" max="10" value="6"></div>
+    <div class="meter"><i id="lvl"></i><u id="gate"></u></div>
+  </div>
+
+  <div class="card" style="display:flex;flex-direction:column;gap:10px">
+    <div style="display:flex;align-items:center;gap:8px"><div class="lab" style="flex:1">Sequência tocada</div>
+      <button id="btnCopy">Copiar sequência</button><button id="btnClear">Limpar</button></div>
+    <div id="hist"><span class="empty" style="border:none;background:none">Os acordes aparecem aqui conforme você toca.</span></div>
+    <textarea id="out" readonly></textarea>
+  </div>
+
+  <p class="tip">Dica: deixe o celular perto do instrumento ou da caixa de som, toque cada acorde por pelo menos meio segundo e ajuste a <b>sensibilidade</b> para a barra passar do risco só quando houver som. Reconhece acordes maiores e menores (e com sétima, se ativado). Em banda completa com voz, o resultado é aproximado. Toque <b>Copiar sequência</b> e cole no editor de uma música.</p>
+</div>
+
+<script>
+"use strict";
+const NS=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'],NF=['C','Db','D','Eb','E','F','Gb','G','Ab','A','Bb','B'];
+let flats=false,use7=false;
+const nm=i=>(flats?NF:NS)[((i%12)+12)%12];
+const $=id=>document.getElementById(id);
+
+// templates de acordes: [nome-sufixo, intervalos, penalidade]
+const QUAL=[['', [0,4,7],0],['m',[0,3,7],0],['7',[0,4,7,10],0.05],['m7',[0,3,7,10],0.05],['7M',[0,4,7,11],0.07]];
+function templates(){
+  const T=[];
+  for(let r=0;r<12;r++)for(const [suf,iv,pen] of QUAL){
+    if(!use7&&iv.length>3)continue;
+    const v=new Float32Array(12);iv.forEach((d,j)=>v[(r+d)%12]=j===0?1.15:1);
+    T.push({r,suf,v,n:Math.hypot(...v),pen});
+  }
+  return T;
+}
+let TPL=templates();
+const KMAJ=[6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88],KMIN=[6.33,2.68,3.52,5.38,2.60,3.53,2.54,4.75,3.98,2.69,3.34,3.17];
+function corr(a,b){const n=12;let ma=0,mb=0;for(let i=0;i<n;i++){ma+=a[i];mb+=b[i]}ma/=n;mb/=n;let s=0,sa=0,sb=0;for(let i=0;i<n;i++){const x=a[i]-ma,y=b[i]-mb;s+=x*y;sa+=x*x;sb+=y*y}return s/Math.sqrt(sa*sb||1)}
+
+let ctx,an,stream,timer,binPc,binBass,freqBuf,timeBuf,running=false,wake=null;
+let sm=new Float32Array(12),keyAcc=new Float32Array(12),keyFrames=0;
+let cand=null,candN=0,current=null,t0=0,hist=[];
+
+function setStatus(on,txt){$('st').className='st'+(on?' on':'');$('st').querySelector('span').textContent=txt}
+function showMsg(html){const m=$('msg');m.innerHTML=html;m.style.display=html?'block':'none'}
+function toast(t){const d=document.createElement('div');d.className='toast';d.textContent=t;document.body.appendChild(d);setTimeout(()=>d.remove(),2400)}
+
+async function start(){
+  showMsg('');
+  if(!window.isSecureContext||!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+    showMsg('O microfone só funciona quando esta página é aberta por um endereço seguro (<b>https://</b>) direto no Safari, ou no Chrome do computador. Visualizadores de arquivo (app Arquivos, pré-visualização do Claude) bloqueiam o microfone.<div style="opacity:.7;font-size:12px;margin-top:6px">Detalhe técnico: '+location.protocol+'</div>');return;
+  }
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+  }catch(e){
+    const framed=(()=>{try{return window.self!==window.top}catch(_){return true}})();
+    const where=location.protocol==='file:'?'arquivo local':framed?'dentro de outro app/visualizador':location.host;
+    let html;
+    if(framed||location.protocol==='file:'||location.protocol==='blob:'||location.protocol==='data:'){
+      html='<b>Esta página está sendo exibida '+(framed?'dentro de outro app (pré-visualização)':'como arquivo local')+'</b>, e esse visualizador bloqueia o microfone — mesmo com o Safari autorizado. Abra a página pelo link https hospedado, direto no app <b>Safari</b>.';
+    }else if(e&&e.name==='NotAllowedError'){
+      html='O navegador bloqueou o microfone para <b>'+location.host+'</b>. No Safari: toque em <b>aA</b> na barra de endereço › <b>Ajustes do Site</b> › <b>Microfone</b> › <b>Permitir</b>, depois recarregue a página. Confira também Ajustes › Safari › Microfone (não pode estar em “Negar”) e se outro app (chamada, gravador) não está usando o microfone.';
+    }else if(e&&e.name==='NotFoundError'){
+      html='Nenhum microfone encontrado neste aparelho.';
+    }else if(e&&e.name==='NotReadableError'){
+      html='O microfone está ocupado por outro app (ligação, gravador, outro site). Feche-o e tente de novo.';
+    }else{
+      html='Não consegui acessar o microfone.';
+    }
+    showMsg(html+'<div style="opacity:.7;font-size:12px;margin-top:6px">Detalhe técnico: '+(e&&e.name||'erro')+' · '+where+'</div>');return;
+  }
+  ctx=new (window.AudioContext||window.webkitAudioContext)();
+  if(ctx.state==='suspended')await ctx.resume();
+  const src=ctx.createMediaStreamSource(stream);
+  an=ctx.createAnalyser();an.fftSize=16384;an.smoothingTimeConstant=0;
+  src.connect(an);
+  const sr=ctx.sampleRate,N=an.fftSize;
+  freqBuf=new Float32Array(N/2);timeBuf=new Float32Array(N);
+  binPc=new Int8Array(N/2).fill(-1);binBass=new Uint8Array(N/2);
+  for(let k=1;k<N/2;k++){const f=k*sr/N;if(f<55||f>2100)continue;const mi=69+12*Math.log2(f/440),r=Math.round(mi);if(Math.abs(mi-r)<0.38){binPc[k]=((r%12)+12)%12;if(f<260)binBass[k]=1}}
+  running=true;$('btnMic').textContent='⏸ Pausar';$('btnMic').classList.remove('pri');
+  setStatus(true,'Ouvindo');
+  if(!t0)t0=performance.now();
+  try{wake=await navigator.wakeLock.request('screen')}catch(e){}
+  timer=setInterval(tick,90);
+}
+function stop(){
+  running=false;clearInterval(timer);
+  try{stream.getTracks().forEach(t=>t.stop())}catch(e){}
+  try{ctx.close()}catch(e){}
+  try{wake&&wake.release()}catch(e){}
+  $('btnMic').textContent='🎤 Ligar microfone';$('btnMic').classList.add('pri');setStatus(false,'Pausado');
+  $('chord').classList.add('dim');
+}
+$('btnMic').onclick=()=>running?stop():start();
+$('btnAcc').onclick=()=>{flats=!flats;$('btnAcc').classList.toggle('on',flats);renderHist();toast(flats?'Usando bemóis (Bb, Eb…)':'Usando sustenidos (A#, D#…)')};
+$('btn7').onclick=()=>{use7=!use7;$('btn7').classList.toggle('on',use7);TPL=templates()};
+$('btnClear').onclick=()=>{hist=[];t0=performance.now();keyAcc.fill(0);keyFrames=0;current=null;renderHist();$('key').textContent='—';$('keyInfo').textContent='ouvindo…'};
+
+function gateLevel(){const s=+$('sens').value;return 0.004*Math.pow(1.6,10-s)} // rms mínimo
+function tick(){
+  an.getFloatTimeDomainData(timeBuf);
+  let e=0;const W=4096,off=timeBuf.length-W;
+  for(let i=off;i<timeBuf.length;i++)e+=timeBuf[i]*timeBuf[i];
+  const rms=Math.sqrt(e/W),g=gateLevel();
+  const toPct=v=>Math.min(100,Math.max(0,(Math.log10(v+1e-6)+4)/3.3*100));
+  $('lvl').style.width=toPct(rms)+'%';$('gate').style.left=toPct(g)+'%';
+  if(rms<g){fade();return}
+  // ---- nota (YIN) ----
+  pitch(timeBuf.subarray(off),ctx.sampleRate);
+  // ---- croma / acorde ----
+  an.getFloatFrequencyData(freqBuf);
+  const c=new Float32Array(12),bass=new Float32Array(12);
+  for(let k=1;k<freqBuf.length;k++){const p=binPc[k];if(p<0)continue;const db=freqBuf[k];if(!(db>-120))continue;const m=Math.pow(10,db/20);c[p]+=m;if(binBass[k])bass[p]+=m}
+  let mx=0;for(let i=0;i<12;i++){c[i]=Math.log(1+c[i]*200);if(c[i]>mx)mx=c[i]}
+  if(mx<=0)return fade();
+  let bm=0;for(let i=0;i<12;i++){c[i]/=mx;if(bass[i]>bm)bm=bass[i]}
+  for(let i=0;i<12;i++){sm[i]=sm[i]*0.45+c[i]*0.55;keyAcc[i]+=c[i]}
+  keyFrames++;
+  const sn=Math.hypot(...sm)||1;
+  let best=null,bs=-1,second=-1;
+  for(const t of TPL){let d=0;for(let i=0;i<12;i++)d+=sm[i]*t.v[i];let s=d/(sn*t.n)-t.pen+(bm>0?0.08*bass[t.r]/bm:0);
+    if(s>bs){second=bs;bs=s;best=t}else if(s>second)second=s}
+  $('conf').firstElementChild.style.width=Math.max(0,Math.min(100,(bs-0.55)/0.4*100))+'%';
+  const strong=[...sm].map((v,i)=>[v,i]).filter(x=>x[0]>0.62).sort((a,b)=>b[0]-a[0]).slice(0,5);
+  $('notes').innerHTML='Notas: '+strong.map(x=>`<span>${nm(x[1])}</span>`).join('');
+  const ok=bs>0.72&&bs-second>0.015;
+  const label=ok?{r:best.r,suf:best.suf}:null;
+  const key=label?label.r+'|'+label.suf:null;
+  if(key&&cand===key)candN++;else{cand=key;candN=1}
+  if(key&&candN>=3&&(!current||current.key!==key)){
+    current={key,r:label.r,suf:label.suf};
+    const t=(performance.now()-t0)/1000;
+    const last=hist[hist.length-1];
+    if(!last||last.key!==key)hist.push({key,r:label.r,suf:label.suf,t});
+    renderHist();
+  }
+  if(current){$('chord').textContent=nm(current.r)+current.suf;$('chord').classList.toggle('dim',!ok)}
+  if(keyFrames%11===0)estimateKey();
+}
+function fade(){$('chord').classList.add('dim');$('conf').firstElementChild.style.width='0';cand=null;candN=0;for(let i=0;i<12;i++)sm[i]*=0.6}
+function pitch(x,sr){
+  const W=x.length,tMax=Math.min(Math.floor(sr/55),W>>1),tMin=Math.floor(sr/1400),n=W-tMax;
+  const d=new Float32Array(tMax+1);
+  for(let tau=1;tau<=tMax;tau++){let s=0;for(let i=0;i<n;i++){const v=x[i]-x[i+tau];s+=v*v}d[tau]=s}
+  let run=0,tau=-1;
+  for(let t=1;t<=tMax;t++){run+=d[t];d[t]=d[t]*t/(run||1)}
+  for(let t=tMin;t<tMax;t++){if(d[t]<0.15){while(t+1<tMax&&d[t+1]<d[t])t++;tau=t;break}}
+  if(tau<0){$('note').innerHTML='—';$('hz').innerHTML='&nbsp;';$('tuner').classList.remove('in');return}
+  const a=d[tau-1],b=d[tau],c=d[tau+1]||b,den=a-2*b+c,tt=den?tau+(a-c)/(2*den):tau;
+  const f=sr/tt,mi=69+12*Math.log2(f/440),r=Math.round(mi),cents=Math.round((mi-r)*100);
+  $('note').innerHTML=nm(r)+`<sub>${Math.floor(r/12)-1}</sub>`;
+  $('hz').textContent=f.toFixed(1)+' Hz';
+  $('needle').style.left=(50+cents)+'%';
+  $('tuner').classList.toggle('in',Math.abs(cents)<=5);
+  $('cents').textContent=(cents>0?'+':'')+cents+' cents';
+}
+function estimateKey(){
+  let best=-2,k=null;
+  for(let r=0;r<12;r++){const rot=p=>Array.from({length:12},(_,i)=>p[((i-r)%12+12)%12]);
+    const a=corr(keyAcc,rot(KMAJ)),b=corr(keyAcc,rot(KMIN));
+    if(a>best){best=a;k={r,m:''}}if(b>best){best=b;k={r,m:'m'}}}
+  if(!k||keyFrames<20)return;
+  $('key').textContent=nm(k.r)+k.m;
+  const rel=k.m?nm(k.r+3):nm(k.r+9)+'m';
+  $('keyInfo').textContent=`confiança ${Math.round(Math.max(0,best)*100)}% · relativo: ${rel}`;
+}
+function fmt(s){s=Math.max(0,Math.floor(s));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
+function renderHist(){
+  const h=$('hist');
+  if(!hist.length){h.innerHTML='<span class="empty" style="border:none;background:none">Os acordes aparecem aqui conforme você toca.</span>';return}
+  h.innerHTML=hist.map((x,i)=>`<span class="${i===hist.length-1?'new':''}"><b>${nm(x.r)+x.suf}</b><small>${fmt(x.t)}</small></span>`).join('');
+  h.scrollTop=h.scrollHeight;
+}
+function histText(){
+  const L=[];for(let i=0;i<hist.length;i+=4){const g=hist.slice(i,i+4);L.push(('['+fmt(g[0].t)+']').padEnd(8)+g.map(x=>(nm(x.r)+x.suf).padEnd(6)).join('').trimEnd())}
+  return '[Tocado ao vivo]\n'+L.join('\n');
+}
+$('btnCopy').onclick=async()=>{
+  if(!hist.length)return toast('Nenhum acorde ainda.');
+  const t=histText();
+  try{await navigator.clipboard.writeText(t);toast('Copiado! Cole no editor da música no NaNota.')}
+  catch(e){const o=$('out');o.style.display='block';o.value=t;o.select();toast('Selecione e copie o texto abaixo.')}
+};
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&running)stop()});
+</script>
+</body>
+</html>
