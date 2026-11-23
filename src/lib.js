@@ -82,7 +82,8 @@ export async function createLinkToken(env, userId, purpose) {
 /* ---------- conversão entre o banco e o formato do app ---------- */
 export function songOut(r, me) {
   let tags = []; try { tags = JSON.parse(r.tags); } catch {}
-  return { id: r.id, type: 'song', title: r.title, artist: r.artist, key: r.song_key, bpm: r.bpm, tags, notes: r.notes, link: r.link, content: r.content, transpose: r.transpose, catalog: !!r.is_public, mine: !!me && r.user_id === me.id, updated: r.updated_at * 1000 };
+  let links = {}; try { links = JSON.parse(r.links || '{}'); } catch {}
+  return { id: r.id, type: 'song', title: r.title, artist: r.artist, key: r.song_key, bpm: r.bpm, tags, notes: r.notes, link: r.link, content: r.content, links, transpose: r.transpose, catalog: !!r.is_public, mine: !!me && r.user_id === me.id, updated: r.updated_at * 1000 };
 }
 export function setOut(r) {
   let items = []; try { items = JSON.parse(r.items); } catch {}

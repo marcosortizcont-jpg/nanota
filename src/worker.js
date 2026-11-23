@@ -141,15 +141,19 @@ async function api(req, env, url) {
         }
       }
       const pub = staff ? (s.catalog ? 1 : 0) : (ex ? ex.is_public : 0);
+      const lk = {};
+      if (s.links && typeof s.links === 'object') for (const k of ['youtube', 'spotify', 'deezer', 'outro']) {
+        const u = String(s.links[k] || '').trim(); if (/^https?:\/\/\S+$/i.test(u) && u.length <= 500) lk[k] = u;
+      }
       const tags = JSON.stringify((Array.isArray(s.tags) ? s.tags : []).map(t => str(t, 40)).slice(0, 30));
       const vals = [str(s.title, 200), str(s.artist, 200), str(s.key, 12), str(s.bpm, 10), tags, str(s.notes, 1000),
-        str(s.link, 500), String(s.content || ''), Math.max(-11, Math.min(11, parseInt(s.transpose) || 0)), pub, now()];
+        str(s.link, 500), String(s.content || ''), Math.max(-11, Math.min(11, parseInt(s.transpose) || 0)), pub, now(), JSON.stringify(lk)];
       if (ex) {
         await env.DB.prepare(`UPDATE songs SET title = ?, artist = ?, song_key = ?, bpm = ?, tags = ?, notes = ?, link = ?, content = ?,
-          transpose = ?, is_public = ?, updated_at = ?, deleted = 0 WHERE id = ?`).bind(...vals, id).run();
+          transpose = ?, is_public = ?, updated_at = ?, links = ?, deleted = 0 WHERE id = ?`).bind(...vals, id).run();
       } else {
-        await env.DB.prepare(`INSERT INTO songs (title, artist, song_key, bpm, tags, notes, link, content, transpose, is_public, updated_at, id, user_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(...vals, id, me.id).run();
+        await env.DB.prepare(`INSERT INTO songs (title, artist, song_key, bpm, tags, notes, link, content, transpose, is_public, updated_at, links, id, user_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(...vals, id, me.id).run();
       }
       return json({ ok: true });
     }

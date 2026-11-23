@@ -1,6 +1,6 @@
 :root{--bg:#0f1115;--panel:#171a21;--panel2:#1e222b;--line:#272c37;--text:#ebe8e3;--muted:#8d95a5;--chord:#f5b43c;--accent:#f5b43c;--accentText:#1a1300;--sec:#7cc4ff;--danger:#ff6b6b;--ok:#5fd39a}
 *{box-sizing:border-box}
-html,body{margin:0;background:var(--bg);color:var(--text);font-family:'Space Grotesk',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;-webkit-font-smoothing:antialiased;font-feature-settings:'cv11','ss03';letter-spacing:-0.005em;text-rendering:optimizeLegibility}
 button,input,select,textarea{font:inherit;color:inherit}
 button{cursor:pointer}
 a{color:var(--sec)}
