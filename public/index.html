@@ -884,6 +884,7 @@ function topbar(active){
     <div id="status" class="status"></div>
     <button class="btn ghost icon" data-act="theme" title="Tema claro/escuro">${S.prefs.theme==='dark'?'☀':'☾'}</button>
     <a class="btn sm" href="/ao-vivo.html" title="Notas e acordes ao vivo pelo microfone">🎤 Ao vivo</a>
+    <a class="btn sm" href="/separar.html" title="Separar voz e instrumentos (estilo Moises)">🎚️ Separar</a>
     <button class="btn sm" data-act="backup">Backup</button>
     ${ME?`<button class="btn sm" data-act="account" title="${esc(ME.email)}">👤 ${esc((ME.name||ME.email).split(' ')[0])}</button>`:''}
   </div></div>`;
@@ -2311,6 +2312,13 @@ async function startTranscribe(lang){
   sync();
 }
 let AUD_CACHE=null;
+/* leva o áudio para a página de separação de faixas (no mesmo site) */
+async function sendToSeparator(file){
+  try{const db=await new Promise((ok,no)=>{const r=indexedDB.open('nanota-handoff',1);r.onupgradeneeded=()=>r.result.createObjectStore('f');r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error)});
+    await new Promise((ok,no)=>{const tx=db.transaction('f','readwrite');tx.objectStore('f').put({blob:file,name:file.name},'audio');tx.oncomplete=ok;tx.onerror=()=>no(tx.error)});
+    stopAudio();location.href='/separar.html?de=importacao'}
+  catch(e){location.href='/separar.html'}
+}
 function drawAudioResult(){
   const out=document.getElementById('audOut');if(!out||!AUD)return;
   const {res,file,dec}=AUD;
@@ -2339,6 +2347,7 @@ function drawAudioResult(){
     ${comb&&AUD.mode==='comb'?`
       <div class="info">${comb.semis?`A cifra está em <b>${esc(comb.chartKey)}</b> e a gravação em <b>${esc(res.key)}</b> — transpus a cifra <b>${comb.semis>0?'+':''}${comb.semis}</b>.`:`A cifra (${esc(comb.chartKey||'—')}) está no mesmo tom da gravação.`} ${comb.byRec?` Encontrei <b>${comb.matched} de ${comb.total}</b> frases cantadas na cifra: ela foi montada na ordem exata desta gravação, com as repetições. Frases que não estão na cifra (falas, improvisos) aparecem marcadas “fora da cifra”, com os acordes ouvidos.`:` O roteiro mostra a ordem das partes nesta versão.${canTr&&L.status!=='done'?' Quando a letra terminar de ser transcrita, a cifra é remontada na ordem exata da gravação.':''}`}</div>`:''}
     ${AUD.mode==='letra'?'<div class="info">Cada acorde está em cima da palavra cantada no momento em que ele soa. Confira a letra: a IA pode errar palavras quando a voz está baixa ou embolada com os instrumentos.</div>':''}
+    ${API_MODE?`<div class="chips"><button class="btn sm" data-sep="1" title="Separa voz, bateria, baixo e outros (estilo Moises), com as notas destacadas">🎚️ Separar instrumentos (voz, bateria, baixo, outros)</button></div>`:''}
     <div class="ptitle">Partes — toque para ouvir</div>
     <div class="chips" id="audSec">${res.sections.map(s=>`<button class="btn sm" data-t="${s.t}">${esc(s.name)} · ${fmtT(s.t)}</button>`).join('')}</div>
     <div class="ptitle">${AUD.mode==='comb'?(comb.byRec?'Cifra final: cifra anexada na ordem da gravação':'Cifra final (letra da cifra + dados da gravação)'):AUD.mode==='letra'?'Cifra completa: letra transcrita + acordes da gravação':'Cifra gerada do áudio'}</div>
@@ -2352,6 +2361,7 @@ function drawAudioResult(){
     if(k!==cur){if(cur>=0&&btns[cur])btns[cur].classList.remove('cur');cur=k;if(k>=0){btns[k].classList.add('cur');btns[k].scrollIntoView({block:'nearest'})}}});
   out.onclick=e=>{
     const md=e.target.closest('[data-mode]');if(md){AUD.mode=md.dataset.mode;drawAudioResult();return}
+    const sp=e.target.closest('[data-sep]');if(sp){sendToSeparator(file);return}
     const lr=e.target.closest('[data-lyrraw]');if(lr){AUD.lyrRaw=!AUD.lyrRaw;drawAudioResult();return}
     const ly=e.target.closest('[data-lyr]');if(ly){const sel=out.querySelector('#lyrLang');startTranscribe(sel?sel.value:'pt');return}
     const tp=e.target.closest('[data-tempo]');if(tp){runAudio(file,tp.dataset.tempo);return}
