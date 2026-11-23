@@ -141,7 +141,18 @@ async function api(req, env, url) {
     const mayEdit = ex && (ex.user_id === me.id || (ex.is_public && staff));
     if (ex && !mayEdit) return err(ex.is_public ? 403 : 404, ex.is_public ? 'Só o administrador pode alterar uma cifra padrão. Personalize-a dentro do seu repertório.' : 'Não encontrada.');
     if (m === 'DELETE') {
-      if (ex) await env.DB.prepare('DELETE FROM songs WHERE id = ?').bind(id).run();
+      // excluir da biblioteca geral: só administrador/master. Tirar de um repertório é outra coisa (editar o repertório).
+      if (!staff) return err(403, 'Só o administrador pode excluir músicas da biblioteca. Para tirar a música de um repertório, use o ✕ dentro do repertório.');
+      if (ex) {
+        await env.DB.prepare('DELETE FROM songs WHERE id = ?').bind(id).run();
+        // tira a música de todos os repertórios que a usavam
+        const rs = await env.DB.prepare('SELECT id, items, version FROM setlists WHERE items LIKE ?').bind('%' + id + '%').all();
+        for (const r of rs.results || []) {
+          let items = []; try { items = JSON.parse(r.items || '[]'); } catch (e) { continue; }
+          const next = items.filter(it => it && it.songId !== id);
+          if (next.length !== items.length) await env.DB.prepare('UPDATE setlists SET items = ?, version = version + 1, updated_at = ? WHERE id = ?').bind(JSON.stringify(next), now(), r.id).run();
+        }
+      }
       return json({ ok: true });
     }
     if (m === 'PUT') {

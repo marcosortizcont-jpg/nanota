@@ -825,6 +825,8 @@ async function fixLyricWords(words,res,opts){
 
 /* ============ Utilidades de UI ============ */
 const app=document.getElementById('app');
+function undoToast(msg,undo){document.querySelectorAll('.toast').forEach(x=>x.remove());const t=document.createElement('div');t.className='toast';t.innerHTML=`<span>${esc(msg)}</span> <button class="btn sm" style="margin-left:8px">Desfazer</button>`;
+  t.querySelector('button').onclick=()=>{t.remove();undo()};document.body.appendChild(t);setTimeout(()=>t.remove(),6000)}
 function toast(msg){document.querySelectorAll('.toast').forEach(x=>x.remove());const t=document.createElement('div');t.className='toast';t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),2600)}
 function modal(html){
   const ov=document.createElement('div');ov.className='ov';ov.innerHTML=`<div class="mod">${html}</div>`;
@@ -916,7 +918,7 @@ function renderLibList(){
   <ul class="list">${f.map((s,i)=>`<li data-act="open-song" data-i="${i}">
     <div class="li-main"><div class="li-t">${esc(s.title||'Sem título')}</div>
     <div class="li-a">${esc(s.artist||'—')}${s.catalog?'<span class="tag padrao">padrão</span>':''}${(s.tags||[]).map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div></div>
-    ${s.key?`<span class="key">${esc(keyAt(s.key,s.transpose||0))}</span>`:''}</li>`).join('')}</ul>
+    ${s.key?`<span class="key">${esc(keyAt(s.key,s.transpose||0))}</span>`:''}${canDeleteSong(s)?`<button class="btn icon sm ghost danger" data-act="lib-del" data-id="${s.id}" title="Excluir da biblioteca (só administrador)">🗑</button>`:''}</li>`).join('')}</ul>
   ${f.length?'':'<p class="hint" style="text-align:center;padding:30px">Nada encontrado.</p>'}`;
 }
 
@@ -957,7 +959,7 @@ function renderSet(){
         <div class="li-main play" data-act="play-set" data-id="${set.id}" data-i="${i}"><div class="li-t">${esc(s?s.title:'(música excluída)')}${it.content!=null||it.notes!=null?' <span class="tag arr">versão própria</span>':''}</div><div class="li-a">${esc(s?s.artist||'—':'')}</div></div>
         ${s&&P('songs')?`<button class="btn sm" data-act="it-arr" data-i="${i}" title="Personalizar a cifra só neste repertório">✎ Versão</button>`:''}
         ${s&&s.key?(P('transpose')?`<div class="grp"><button class="btn" data-act="it-tr" data-i="${i}" data-d="-1">−</button><span class="lbl">${esc(keyAt(s.key,it.transpose||0))}</span><button class="btn" data-act="it-tr" data-i="${i}" data-d="1">+</button></div>`:`<span class="key">${esc(keyAt(s.key,it.transpose||0))}</span>`):''}
-        ${P('list')?`<div class="ctl"><button class="btn icon sm ghost" data-act="it-mv" data-i="${i}" data-d="-1" ${i?'':'disabled'} title="Subir">↑</button><button class="btn icon sm ghost" data-act="it-mv" data-i="${i}" data-d="1" ${i<items.length-1?'':'disabled'} title="Descer">↓</button><button class="btn icon sm ghost danger" data-act="it-rm" data-i="${i}" title="Remover">✕</button></div>`:''}
+        ${P('list')?`<div class="ctl"><button class="btn icon sm ghost" data-act="it-mv" data-i="${i}" data-d="-1" ${i?'':'disabled'} title="Subir">↑</button><button class="btn icon sm ghost" data-act="it-mv" data-i="${i}" data-d="1" ${i<items.length-1?'':'disabled'} title="Descer">↓</button><button class="btn icon sm ghost danger" data-act="it-rm" data-i="${i}" title="Tirar do repertório (a música continua na biblioteca)">✕</button></div>`:''}
       </li>`}).join('')}</ul>`
     :`<div class="empty"><h2>Repertório vazio</h2><p>${P('list')?'Adicione músicas da sua biblioteca.':'Ainda não há músicas neste repertório.'}</p>${P('list')?'<div class="row"><button class="btn primary" data-act="set-add">+ Adicionar músicas</button></div>':''}</div>`}
   </main>`;
@@ -1038,6 +1040,19 @@ let ME=null;
 const API_MODE=typeof initApi==='function';
 function isStaff(){return !ME||ME.role==='admin'||!!ME.isMaster}
 function canEditSong(s){return !!s&&!s.shared&&(!s.catalog||isStaff())}
+async function deleteSongEverywhere(s){
+  if(!s)return false;
+  if(!canDeleteSong(s)){toast('Só o administrador pode excluir músicas da biblioteca. Para tirar de um repertório, use o ✕ dentro dele.');return false}
+  const uses=Object.values(S.sets).filter(set=>set.items.some(x=>x.songId===s.id));
+  if(!await confirmBox(`Excluir "${s.title||'Sem título'}" da biblioteca de todos?${uses.length?` Ela também sai de ${uses.length} repertório${uses.length>1?'s':''} (${uses.slice(0,3).map(x=>x.name).join(', ')}${uses.length>3?'…':''}).`:''} Isso não pode ser desfeito.`,'Excluir'))return false;
+  removeItem(s);
+  // o servidor já tira dos repertórios; aqui atualiza a tela (e o modo sem servidor)
+  uses.forEach(set=>{const c=clone(set);c.items=c.items.filter(x=>x.songId!==s.id);if(API_MODE){S.sets[c.id]=c}else persist(c)});
+  toast('Música excluída da biblioteca.');
+  if(API_MODE)setTimeout(()=>{try{bgRefresh()}catch(e){}},800);
+  return true;
+}
+function canDeleteSong(s){return !!s&&!s.shared&&isStaff()} // excluir da biblioteca geral: só administrador
 function setPerm(set,k){return !set||!set.group||!set.group.isGroup&&set.group.isOwner!==false||!!(set.group.perms&&set.group.perms[k])}
 function openEditor(song,ret,dirty){S.edit={mode:'song',song:clone(song),isNew:!S.songs[song.id],ret,dirty:!!dirty};S.view='edit';render()}
 function openArrangement(setId,idx,ret){
@@ -1059,7 +1074,7 @@ function renderEdit(){
   app.innerHTML=`<div class="edit">
     <div class="ebar"><button class="btn ghost" data-act="e-cancel">← Voltar</button><div class="t">${title}</div>
       ${arr&&e.hasOverride?'<button class="btn ghost" data-act="e-restore">Restaurar padrão</button>':''}
-      ${!arr&&!e.isNew&&canEditSong(S.songs[s.id])?'<button class="btn danger ghost" data-act="e-del">Excluir</button>':''}
+      ${!arr&&!e.isNew&&canDeleteSong(S.songs[s.id])?'<button class="btn danger ghost" data-act="e-del">Excluir da biblioteca</button>':''}
       <button class="btn primary" data-act="e-save">Salvar</button></div>
     <div class="ebody">
       <div class="ecol">
@@ -2541,7 +2556,8 @@ app.addEventListener('click',async ev=>{
     case 'it-tr':{const set=clone(S.sets[S.setId]);set.items[i].transpose=normSemis((set.items[i].transpose||0)+d);persist(set,700);renderSet();break}
     case 'it-mv':{const set=clone(S.sets[S.setId]);const j=i+d;if(j<0||j>=set.items.length)return;[set.items[i],set.items[j]]=[set.items[j],set.items[i]];persist(set);renderSet();break}
     case 'it-arr':openArrangement(S.setId,i,'set');break;
-    case 'it-rm':{const set=clone(S.sets[S.setId]);set.items.splice(i,1);persist(set);renderSet();break}
+    case 'it-rm':{const set=clone(S.sets[S.setId]);const [rm]=set.items.splice(i,1);persist(set);renderSet();
+      const song=rm&&S.songs[rm.songId];undoToast(`"${song?song.title:'Música'}" saiu do repertório (continua na biblioteca).`,()=>{const c=clone(S.sets[set.id]);c.items.splice(Math.min(i,c.items.length),0,rm);persist(c);renderSet()});break}
     // editor
     case 'e-cancel':leaveEdit();break;
     case 'e-save':{readEdit();const E=S.edit,s=E.song;
@@ -2562,9 +2578,8 @@ app.addEventListener('click',async ev=>{
       const set=clone(S.sets[E.setId]);const it=set.items[E.idx];delete it.content;delete it.notes;persist(set);toast('Cifra padrão restaurada.');editReturn(E.ret);break}
     case 'e-base':{ev.preventDefault();const E=S.edit;if(E.dirty&&!(await confirmBox('Descartar as mudanças desta versão e abrir a cifra padrão?','Abrir padrão')))return;openEditor(E.base,E.ret);break}
     case 'e-blk':openBlk();break;
-    case 'e-del':{const s=S.songs[S.edit.song.id];if(s&&await confirmBox(`Excluir "${s.title}"? Ela também sai dos repertórios.`)){
-      removeItem(s);Object.values(S.sets).forEach(set=>{if(set.items.some(x=>x.songId===s.id)){const c=clone(set);c.items=c.items.filter(x=>x.songId!==s.id);persist(c)}});
-      S.edit=null;S.view='library';render()}break}
+    case 'e-del':{const s=S.songs[S.edit.song.id];if(await deleteSongEverywhere(s)){S.edit=null;S.view='library';render()}break}
+    case 'lib-del':{ev.stopPropagation();const s=S.songs[el.dataset.id];if(await deleteSongEverywhere(s))render();break}
     case 'e-tr':{readEdit();const s=S.edit.song;const key=s.key||detectKey(s.content);const f=keyFlat(key,d);
       s.content=transposeText(s.content,d,f);document.getElementById('eContent').value=s.content;
       const ek=document.getElementById('eKey');if(ek&&s.key){s.key=transposeChord(s.key,d,f);ek.value=s.key}
