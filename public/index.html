@@ -216,6 +216,8 @@ textarea.code{font-family:'JetBrains Mono',monospace;font-size:14px;line-height:
 .drop:hover,.drop.over{border-color:var(--accent);color:var(--text)}
 .bar{height:8px;border-radius:99px;background:var(--panel2);overflow:hidden}
 .bar>i{display:block;height:100%;width:0;background:var(--accent);transition:width .15s}
+.box2{border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.box2 summary{cursor:pointer;font-size:14px}
 .tl{display:flex;flex-wrap:wrap;gap:6px;max-height:260px;overflow:auto;padding:2px}
 .tl button{font-family:'JetBrains Mono',monospace;border:1px solid var(--line);background:var(--panel2);border-radius:8px;padding:6px 10px;display:flex;flex-direction:column;align-items:flex-start;gap:1px;min-width:62px}
 .tl button b{color:var(--chord);font-size:16px}
@@ -1467,8 +1469,10 @@ async function pdfToText(file,onProg){
   });
   // remove cabeçalhos/rodapés repetidos em todas as páginas
   if(pages.length>1){
-    const cnt={};pages.forEach(pg=>new Set(pg.map(l=>l.trim()).filter(Boolean)).forEach(l=>cnt[l]=(cnt[l]||0)+1));
-    pages.forEach((pg,k)=>pages[k]=pg.filter(l=>{const t=l.trim();return !t||cnt[t]<pages.length||isChordLine(l)||classify(l)==='sec'}));
+    // só as 3 primeiras e 3 últimas linhas de cada página podem ser cabeçalho/rodapé (versos repetidos ficam)
+    const edge=pg=>{const ne=pg.map((l,i)=>[l.trim(),i]).filter(x=>x[0]);return new Set([...ne.slice(0,3),...ne.slice(-3)].map(x=>x[1]))};
+    const cnt={};pages.forEach(pg=>{const e=edge(pg);new Set(pg.filter((l,i)=>e.has(i)).map(l=>l.trim())).forEach(l=>cnt[l]=(cnt[l]||0)+1)});
+    pages.forEach((pg,k)=>{const e=edge(pg);pages[k]=pg.filter((l,i)=>{const t=l.trim();return !t||!e.has(i)||cnt[t]<pages.length||isChordLine(l)||classify(l)==='sec'})});
   }
   let meta={};try{meta=(await doc.getMetadata()).info||{}}catch(e){}
   const text=pages.map(pg=>pg.join('\n')).join('\n\n');
@@ -1606,9 +1610,20 @@ function drawImport(tab){
     body.innerHTML=`<label class="drop" id="audDrop"><input type="file" id="audFile" accept="audio/*,.mp3,.m4a,.wav,.ogg,.flac,.aac,.webm" hidden>
       <div style="font-size:28px">♪</div><div><b>Escolha um arquivo de áudio da música</b></div><div class="hint">MP3, M4A, WAV, OGG… (até 8 minutos são analisados)</div></label>
       <div class="info">A análise roda aqui mesmo no seu aparelho e gera a cifra da música inteira: tom, andamento, compassos, acordes (com 7ª, 7M, sus e diminutos), inversões pelo baixo (ex.: D/F#), as partes (intro, primeira parte, refrão, ponte, final) e as paradas como convenção. A letra não é transcrita. <b>Confira de ouvido</b> antes de usar no palco.</div>
+      <details class="box2" id="audChartBox" ${IMP.chart?'open':''}><summary><b>Tem a cifra com letra?</b> Junte para ter a música completa (opcional)</summary>
+        <p class="hint" style="margin:6px 0">Anexe o PDF (ex.: do Cifra Club) ou cole o texto. A letra e os acordes vêm da cifra; a gravação define o tom real, o andamento e o roteiro das partes desta versão.</p>
+        <div class="chips"><label class="btn sm"><input type="file" id="audChart" accept=".pdf,.txt,.cho,.chordpro,application/pdf,text/plain" hidden>📄 Anexar PDF ou texto</label><span class="hint" id="audChartName">${IMP.chart?esc(IMP.chart.name):''}</span></div>
+        <textarea class="code" id="audChartTxt" style="min-height:90px;margin-top:6px" placeholder="…ou cole aqui a cifra com a letra">${IMP.chart&&IMP.chart.pasted?esc(IMP.chart.text):''}</textarea>
+      </details>
       <div id="audOut"></div>`;
     foot.innerHTML=`<button class="btn" data-i="cancel">Fechar</button>`;
     foot.onclick=e=>{const b=e.target.closest('[data-i]');if(!b)return;if(b.dataset.i==='cancel'){stopAudio();m.close()}};
+    const ci=body.querySelector('#audChart'),ct=body.querySelector('#audChartTxt');
+    ci.addEventListener('change',async()=>{const f=ci.files[0];if(!f)return;const nm=body.querySelector('#audChartName');nm.textContent='Lendo '+f.name+'…';
+      try{const text=/\.pdf$/i.test(f.name)||f.type==='application/pdf'?(await pdfToText(f)).text:await f.text();IMP.chart={text,name:f.name};nm.textContent='✓ '+f.name;if(AUD&&AUD.res)drawAudioResult()}
+      catch(e){nm.textContent='Não consegui ler esse arquivo.';IMP.chart=null}});
+    ct.addEventListener('input',()=>{IMP.chart=ct.value.trim()?{text:ct.value,name:'texto colado',pasted:true}:null});
+    ct.addEventListener('change',()=>{if(AUD&&AUD.res)drawAudioResult()});
     const inp=body.querySelector('#audFile'),drop=body.querySelector('#audDrop');
     inp.addEventListener('change',()=>inp.files[0]&&runAudio(inp.files[0]));
     drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('over')});
@@ -1650,7 +1665,7 @@ function drawLinkInfo(){
 
 /* ---- Detecção de acordes por áudio (roda no navegador) ---- */
 let AUD=null;
-function stopAudio(){if(AUD){try{AUD.audio.pause()}catch(e){}try{URL.revokeObjectURL(AUD.url)}catch(e){}AUD=null}}
+function stopAudio(){if(AUD){try{AUD.audio&&AUD.audio.pause()}catch(e){}try{URL.revokeObjectURL(AUD.url)}catch(e){}AUD=null}}
 /* ===== NaNota — motor de transcrição harmônica (roda no navegador, sem servidor) =====
    Etapas: afinação → andamento e batidas → croma por batida (agudos e baixo) → tom
    → acordes (Viterbi com vocabulário de 7 qualidades + inversões) → compassos
@@ -1660,7 +1675,8 @@ const AU_Q=[
   {s:'m',iv:[0,3,7],w:[1,1,.85],fam:'m',p:0},
   {s:'7',iv:[0,4,7,10],w:[1,1,.75,.8],fam:'M',p:-.05},
   {s:'m7',iv:[0,3,7,10],w:[1,1,.75,.8],fam:'m',p:-.05},
-  {s:'7M',iv:[0,4,7,11],w:[1,1,.75,.8],fam:'M',p:-.07},
+  {s:'7M',iv:[0,4,7,11],w:[1,1,.75,.8],fam:'M',p:-.22},
+  {s:'9',iv:[0,4,7,2],w:[1,1,.75,.7],fam:'M',p:-.19},
   {s:'sus4',iv:[0,5,7],w:[1,1,.85],fam:'S',p:-.09},
   {s:'°',iv:[0,3,6],w:[1,1,1],fam:'d',p:-.11},
 ];
@@ -1679,7 +1695,8 @@ function auCorr(a,b){const n=a.length;let ma=0,mb=0;for(let i=0;i<n;i++){ma+=a[i
 const auYield=()=>new Promise(r=>setTimeout(r,0));
 
 /** x: Float32Array mono; sr: taxa. Retorna {key,bpm,beats,chords,bars,sections,breaks,content}. */
-async function auAnalyze(x,sr,onProg){
+async function auAnalyze(x,sr,onProg,opts){
+  opts=opts||{};
   const prog=(p,t)=>onProg&&onProg(p,t);
   const N=8192,hop=2048,frames=Math.max(1,Math.floor((x.length-N)/hop)+1);
   const win=new Float32Array(N);for(let i=0;i<N;i++)win[i]=0.5-0.5*Math.cos(2*Math.PI*i/(N-1));
@@ -1744,15 +1761,17 @@ async function auAnalyze(x,sr,onProg){
   const dur=x.length/sr;
   // 5) croma por batida
   prog(0.7,'Identificando os acordes…');await auYield();
-  const B=beats.length,bc=[],bb=[],be=new Float32Array(B);
   const f0=s=>Math.max(0,Math.min(frames-1,Math.round((s*sr-N/2)/hop)));
   let eMax=1e-9;for(let t=0;t<frames;t++)if(rms[t]>eMax)eMax=rms[t];
-  for(let b=0;b<B;b++){const a=f0(beats[b]),z=Math.max(a+1,f0(b+1<B?beats[b+1]:beats[b]+60/bp));
-    const c=new Float64Array(12),d=new Float64Array(12);let e=0;
-    for(let t=a;t<z&&t<frames;t++){for(let i=0;i<12;i++){c[i]+=ch[t*12+i];d[i]+=cb[t*12+i]}e+=rms[t]}
-    let m1=0,m2=0;for(let i=0;i<12;i++){if(c[i]>m1)m1=c[i];if(d[i]>m2)m2=d[i]}
-    for(let i=0;i<12;i++){c[i]=m1?c[i]/m1:0;d[i]=m2?d[i]/m2:0}
-    bc.push(c);bb.push(d);be[b]=e/Math.max(1,z-a)}
+  const aggregate=bts=>{const B=bts.length,bc=[],bb=[],be=new Float32Array(B);
+    for(let b=0;b<B;b++){const a=f0(bts[b]),z=Math.max(a+1,f0(b+1<B?bts[b+1]:bts[b]+(bts[1]-bts[0]||0.5)));
+      const c=new Float64Array(12),d=new Float64Array(12);let e=0;
+      for(let t=a;t<z&&t<frames;t++){for(let i=0;i<12;i++){c[i]+=ch[t*12+i];d[i]+=cb[t*12+i]}e+=rms[t]}
+      let m1=0,m2=0;for(let i=0;i<12;i++){if(c[i]>m1)m1=c[i];if(d[i]>m2)m2=d[i]}
+      for(let i=0;i<12;i++){c[i]=m1?c[i]/m1:0;d[i]=m2?d[i]/m2:0}
+      bc.push(c);bb.push(d);be[b]=e/Math.max(1,z-a)}
+    return {B,bc,bb,be}};
+  let {B,bc,bb,be}=aggregate(beats);
   // 6) tom
   const tot=new Float64Array(12);bc.forEach((c,b)=>{if(be[b]>eMax*0.05)for(let i=0;i<12;i++)tot[i]+=c[i]+0.5*bb[b][i]});
   let kb=-2,kr=0,km=false;
@@ -1763,13 +1782,19 @@ async function auAnalyze(x,sr,onProg){
   else{addD(0,'m',.12);addD(3,'M',.11);addD(5,'m',.1);addD(7,'M',.1);addD(7,'m',.06);addD(8,'M',.11);addD(10,'M',.11);addD(2,'d',.05)}
   // 7) emissões + Viterbi
   const S=AU_T.length,NS=S;// estado extra = sem acorde
-  const em=[];
+  let em=[];
+  const buildEm=()=>{em=[];
   for(let b=0;b<B;b++){const e=new Float64Array(S+1),silent=be[b]<eMax*0.06;const z=auZ(bc[b]),bd=bb[b];
+    let bm=0;for(let i=1;i<12;i++)if(bd[i]>bd[bm])bm=i;
+    let b2=0;for(let i=0;i<12;i++)if(i!==bm&&bd[i]>b2)b2=bd[i];const clear=1-b2; // baixo nítido = pico isolado
     for(let s=0;s<S;s++){const T=AU_T[s];let v=0;for(let i=0;i<12;i++)v+=z[i]*T.z[i];
-      v+=0.16*bd[T.r]+0.04*(T.tones.slice(1).some(t=>bd[t]>0.9)?1:0);
-      v+=(dia[T.r+T.q.fam]??-0.04)+T.q.p;
+      v*=0.85;
+      v+=0.4*bd[T.r];
+      if(bm!==T.r){if(T.tones.includes(bm))v+=0.22*bd[bm];else v-=0.3*clear}
+      v+=(dia[T.r+T.q.fam]??-0.05)+T.q.p;
       e[s]=silent?v-1:v}
-    e[NS]=silent?0.6:-0.3;em.push(e)}
+    e[NS]=silent?0.6:-0.3;em.push(e)}};
+  buildEm();
   const vit=penal=>{let V=new Float64Array(S+1);const bk=[];
     for(let b=0;b<B;b++){let mi=0;for(let s=1;s<=S;s++)if(V[s]>V[mi])mi=s;const pen=penal(b);
       const nv=new Float64Array(S+1),k=new Int16Array(S+1);
@@ -1777,11 +1802,21 @@ async function auAnalyze(x,sr,onProg){
       V=nv;bk.push(k)}
     let s=0;for(let i=1;i<=S;i++)if(V[i]>V[s])s=i;const path=new Int16Array(B);for(let b=B-1;b>=0;b--){path[b]=s;s=bk[b][s]}return path};
   let path=vit(()=>0.45);
+  // andamento lido em dobro (comum em baladas): acordes durando 6+ batidas em média → junta as batidas de 2 em 2
+  {const cnt=new Array(8).fill(0);for(let b=1;b<B;b++)if(path[b]!==path[b-1]&&(b+1>=B||path[b+1]===path[b]))cnt[b%8]++;
+    let best4=0,p4=0;for(let p=0;p<4;p++){const s2=cnt[p]+cnt[p+4];if(s2>best4){best4=s2;p4=p}}
+    const conc8=Math.max(cnt[p4],cnt[p4+4])/(best4||1);
+    const half=opts.tempo==='half'||(opts.tempo!=='keep'&&opts.tempo!=='double'&&bp>=110&&conc8>=0.6);
+    if(opts.tempo==='double'){const nb=[];for(let i=0;i<beats.length;i++){nb.push(beats[i]);if(i+1<beats.length)nb.push((beats[i]+beats[i+1])/2)}
+      beats=nb;bp=bp*2;({B,bc,bb,be}=aggregate(beats));buildEm();path=vit(()=>0.45)}
+    else if(half){let best=-1,ph0=0;for(let ph=0;ph<2;ph++){let sc=0;for(let b=ph;b<beats.length;b+=2)sc+=ons[Math.round(beats[b]*fps)]||0;if(sc>best){best=sc;ph0=ph}}
+      beats=beats.filter((_,i)=>i%2===ph0);bp=bp/2;({B,bc,bb,be}=aggregate(beats));buildEm();path=vit(()=>0.45)}}
   // compasso 4/4: fase do 1º tempo = onde as trocas mais acontecem
   const cnt=[0,0,0,0];for(let b=1;b<B;b++)if(path[b]!==path[b-1])cnt[b%4]+=1;
   for(let b=0;b<B;b++)cnt[b%4]+=0.15*(ons[Math.round(beats[b]*fps)]||0);
   let ph=0;for(let i=1;i<4;i++)if(cnt[i]>cnt[ph])ph=i;
-  path=vit(b=>{const p=((b-ph)%4+4)%4;return p===0?0.3:p===2?0.5:0.75});
+  const slow=bp<95;
+  path=vit(b=>{const p=((b-ph)%4+4)%4;return p===0?0.3:p===2?(slow?0.38:0.5):(slow?0.5:0.75)});
   // 8) nomes, inversões
   const flat=new Set(['F','Bb','Eb','Ab','Db','Gb','Dm','Gm','Cm','Fm','Bbm','Ebm']);
   const NSs=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'],NFs=['C','Db','D','Eb','E','F','Gb','G','Ab','A','Bb','B'];
@@ -1816,60 +1851,65 @@ async function auAnalyze(x,sr,onProg){
   bars.forEach((br,i)=>{br.t0=beats[br.beats[0]];br.ch=br.beats.map(b=>beatChord[b]);br.e=br.beats.reduce((a,b)=>a+be[b],0)/br.beats.length;br.i=i});
   while(bars.length>1&&bars[bars.length-1].ch.every(n=>n==='N'))bars.pop();
   const body=bars.filter(b=>!b.pickup);
-  // 11) partes: frases de 4 compassos agrupadas por semelhança
-  const core=c=>c.map(n=>n.split('/')[0]).join(' ');
-  const phrases=[];for(let i=0;i<body.length;i+=4)phrases.push(body.slice(i,i+4));
-  if(phrases.length>1&&phrases[phrases.length-1].length<3){const l=phrases.pop();phrases[phrases.length-1].push(...l)}
-  const sim=(a,b)=>{const x=a.flatMap(br=>br.ch.map(n=>n.split('/')[0])),y=b.flatMap(br=>br.ch.map(n=>n.split('/')[0]));const L=Math.max(x.length,y.length);let s=0;for(let i=0;i<Math.min(x.length,y.length);i++)if(x[i]===y[i])s++;return s/L};
-  const groups=[];const pg=phrases.map(p=>{for(let g=0;g<groups.length;g++)if(sim(groups[g],p)>=0.7)return g;groups.push(p);return groups.length-1});
-  const pE=phrases.map(p=>p.reduce((a,b)=>a+b.e,0)/p.length),meanE=pE.reduce((a,b)=>a+b,0)/Math.max(1,pE.length);
-  // runs de grupos iguais
-  let runs=[];pg.forEach((g,i)=>{const r=runs[runs.length-1];if(r&&r.g===g)r.p.push(i);else runs.push({g,p:[i]})});
-  // introdução: primeira frase mais fraca que a média, num grupo que se repete depois
-  if(runs.length>1&&runs[0].p.length>1&&pE[runs[0].p[0]]<meanE*0.85){const i=runs[0].p.shift();runs.unshift({g:'intro',p:[i]})}
-  // une grupos que sempre aparecem em sequência (ex.: as duas metades do refrão)
-  for(let it=0;it<8;it++){let changed=false;const ids=[...new Set(runs.map(r=>r.g))];
-    outer:for(const a of ids)for(const c of ids){if(a===c)continue;
-      const ia=runs.map((r,i)=>r.g===a?i:-1).filter(i=>i>=0);if(ia.length<2)continue;
-      if(ia.every(i=>runs[i+1]&&runs[i+1].g===c)&&runs.every((r,i)=>r.g!==c||(runs[i-1]&&runs[i-1].g===a))){
-        const nr=[];for(let i=0;i<runs.length;i++){if(runs[i].g===a&&runs[i+1]&&runs[i+1].g===c){nr.push({g:a+'+'+c,p:[...runs[i].p,...runs[i+1].p]});i++}else nr.push(runs[i])}
-        runs=nr;changed=true;break outer}}
-    if(!changed)break}
-  const occ={};runs.forEach(r=>occ[r.g]=(occ[r.g]||0)+1);
-  const parts=runs.map(r=>{const bs=r.p.flatMap(i=>phrases[i]);return {g:r.g,bars:bs,e:r.p.reduce((a,i)=>a+pE[i],0)/r.p.length}});
-  const rep=[...new Set(runs.map(r=>r.g))].filter(g=>occ[g]>1);
-  const avgE=g=>{const ps=parts.filter(p=>p.g===g);return ps.reduce((a,p)=>a+p.e,0)/ps.length};
-  const chorus=rep.length>1?rep.reduce((a,b)=>avgE(b)>avgE(a)?b:a):rep.length===1&&avgE(rep[0])>meanE*1.05?rep[0]:null;
-  const labels={intro:'Intro'};let nV=0,nB=0;
-  if(chorus)labels[chorus]='Refrão';
-  parts.forEach((p,i)=>{if(labels[p.g])return;
-    if(occ[p.g]===1&&i===0&&parts.length>1)labels[p.g]='Intro';
-    else if(occ[p.g]===1&&i===parts.length-1&&parts.length>2)labels[p.g]='Final';
-    else if(occ[p.g]>1)labels[p.g]=['Primeira parte','Segunda parte','Terceira parte'][Math.min(2,nV++)];
-    else labels[p.g]=nB++===0?'Ponte':'Ponte '+(nB)});
+  // 11) partes: procura trechos que se repetem (refrão, partes) em qualquer posição
+  const nb=body.length;
+  const rootOf=n=>n==='N'?'N':n.split('/')[0].match(/^[A-G][#b]?/)[0];
+  const sig=body.map(br=>[rootOf(br.ch[0]),rootOf(br.ch[Math.min(2,br.ch.length-1)])]);
+  const simAt=(i,j,L)=>{let m=0,t=0;for(let k=0;k<L;k++){const a=sig[i+k],c=sig[j+k];if(!a||!c)return 0;for(let h=0;h<2;h++){t++;if(a[h]===c[h])m++}}return m/t};
+  const used=new Int16Array(nb).fill(-1),pats=[];
+  const barE=body.map(b=>b.e);
+  for(let round=0;round<4;round++){
+    let best=null;
+    for(const L of [8,4]){if(L>nb/2)continue;
+      for(let i=0;i+L<=nb;i++){if([...Array(L).keys()].some(k=>used[i+k]>=0))continue;
+        const occ=[i];
+        for(let j=i+L;j+L<=nb;j++){if([...Array(L).keys()].some(k=>used[j+k]>=0))continue;if(simAt(i,j,L)>=0.75){occ.push(j);j+=L-1}}
+        if(occ.length<2)continue;
+        const cov=occ.length*L,e=occ.reduce((a,o)=>a+barE.slice(o,o+L).reduce((x,y)=>x+y,0)/L,0)/occ.length;
+        const score=cov+(L===8?1:0)+e/eMax*0.5;
+        if(!best||score>best.score)best={L,occ,score,e}}}
+    if(!best)break;
+    const id=pats.length;pats.push(best);best.occ.forEach(o=>{for(let k=0;k<best.L;k++)used[o+k]=id})}
+  // regiões contínuas
+  const regs=[];for(let i=0;i<nb;){const id=used[i];let j=i;while(j+1<nb&&used[j+1]===id)j++;regs.push({id,a:i,b:j});i=j+1}
+  // nomes: refrão = padrão mais forte; os outros por ordem de aparição
+  const meanE=barE.reduce((x,y)=>x+y,0)/Math.max(1,nb);
+  let chorusId=-1;pats.forEach((p,k)=>{if(chorusId<0||p.e>pats[chorusId].e)chorusId=k});
+  if(chorusId>=0&&pats[chorusId].e<meanE*0.98&&pats.length>1)chorusId=-1;
+  const names={};let nP=0,nB=0;
+  if(chorusId>=0)names[chorusId]='Refrão';
+  const PARTS=['Primeira Parte','Segunda Parte','Terceira Parte','Quarta Parte'];
+  regs.forEach((r,i)=>{if(r.id>=0){if(names[r.id]===undefined)names[r.id]=PARTS[Math.min(3,nP++)];r.name=names[r.id]}
+    else r.name=i===0?'Intro':i===regs.length-1?'Final':(r.b-r.a+1<=4&&nB===0?(nB++,'Ponte'):(nB++,nB>1?'Ponte '+nB:'Ponte'))});
+  if(regs.length>1&&regs[0].id>=0&&regs[0].a===0){const r=regs[0],L=Math.min(4,r.b-r.a+1);const e0=barE.slice(0,L).reduce((x,y)=>x+y,0)/L;
+    if(e0<meanE*0.82&&r.b-r.a+1>L){regs.splice(0,1,{id:-2,a:0,b:L-1,name:'Intro'},{...r,a:L})}else if(e0<meanE*0.82&&r.b-r.a+1===L)r.name='Intro'}
+  // junta regiões vizinhas de mesmo nome
+  const secs=[];regs.forEach(r=>{const l=secs[secs.length-1];if(l&&l.name===r.name)l.b=r.b;else secs.push({...r})});
+  const sections=secs.map(r=>({name:r.name,t:body[r.a].t0,bars:body.slice(r.a,r.b+1)}));
   const fmt=s=>{s=Math.max(0,Math.floor(s));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')};
-  const sections=parts.map(p=>({name:labels[p.g],t:p.bars.length?p.bars[0].t0:0,bars:p.bars}));
-  // 12) cifra
-  const cell=br=>{const c=br.ch;let s;
-    if(c.every(n=>n===c[0]))s=c[0];
-    else if(c.length===4&&c[0]===c[1]&&c[2]===c[3])s=c[0]+' '+c[2];
-    else{s=[];c.forEach((n,i)=>{if(i===0||n!==c[i-1])s.push(n)});s=s.join(' ')}
-    s=s.split(' ').filter(n=>n!=='N').join(' ');return s||'%'};
-  const lines=[];
+  // 12) cifra no formato do Cifra Club: [Parte] e linhas de acordes (4 compassos por linha, repetições como "(2x)")
   const brkAt={};breaks.forEach(b=>{const bi=bars.findIndex(br=>br.beats.includes(b));if(bi>=0)(brkAt[bi]=brkAt[bi]||[]).push(bars[bi].beats.indexOf(b)+1)});
+  const barTxt=br=>{const out=[];br.ch.forEach((n,i)=>{if(n!=='N'&&(i===0||n!==br.ch[i-1]))out.push(n)});return out};
+  const lineOf=row=>{const toks=[];let last=null;row.forEach(br=>{barTxt(br).forEach(n=>{if(n!==last){toks.push(n);last=n}})});return toks};
+  const pad=toks=>toks.map(t=>t.padEnd(Math.max(4,t.length+2))).join('').trimEnd();
+  const lines=[];
   const pick=bars.find(b=>b.pickup);
-  if(pick&&pick.ch.some(n=>n!=='N'))lines.push('[Entrada]','| '+cell(pick).padEnd(10)+'|','');
-  let lastName='',rpt=0;
-  sections.forEach((sec,si)=>{
-    lines.push(`[${sec.name} — ${fmt(sec.t)}]`);
-    for(let i=0;i<sec.bars.length;i+=4){const row=sec.bars.slice(i,i+4);
-      lines.push('| '+row.map(br=>cell(br).padEnd(10)).join('| ')+'|');
-      row.forEach(br=>{if(brkAt[br.i])lines.push(`@Convenção: parada no ${brkAt[br.i].join('º e ')}º tempo do compasso ${br.i+1-(pick?1:0)}`)})}
+  sections.forEach(sec=>{
+    const rows=[];for(let i=0;i<sec.bars.length;i+=4)rows.push(sec.bars.slice(i,i+4));
+    let out=rows.map(r=>({t:pad(lineOf(r)),bars:r})).filter(r=>r.t);
+    if(!out.length)return;
+    const short=sec.bars.length<=8&&/Intro|Final|Ponte|Solo/.test(sec.name)&&!sec.bars.some(br=>brkAt[br.i]);
+    if(short){lines.push(`[${sec.name}] `+pad(lineOf(sec.bars)),'');return}
+    lines.push(`[${sec.name}]`);
+    for(let i=0;i<out.length;){let k=1;while(i+k<out.length&&out[i+k].t===out[i].t)k++;
+      lines.push(out[i].t+(k>1?`  (${k}x)`:''));
+      for(let q=i;q<i+k;q++)out[q].bars.forEach(br=>{if(brkAt[br.i])lines.push(`@Convenção: parada no ${brkAt[br.i].join('º e ')}º tempo`)});
+      i+=k}
     lines.push('')});
   const content=lines.join('\n').replace(/\n+$/,'');
   prog(1,'Pronto');
   return {key:keyName,bpm:Math.round(bp),tuning:Math.round(tune*100),beats,beatChord,segs:segs.map(g=>({c:g.name,t0:beats[g.b],t1:g.e+1<B?beats[g.e+1]:dur})).filter(g=>g.c!=='N'),
-    sections:sections.map(s=>({name:s.name,t:s.t,bars:s.bars.length})),breaks:breaks.map(b=>beats[b]),content,duration:dur,bars:bars.map(b=>({t:b.t0,ch:b.ch}))};
+    sections:sections.map(s=>{const r=[];s.bars.forEach(br=>br.ch.forEach(n=>{if(n==='N')return;const x=rootOf(n);if(r[r.length-1]!==x)r.push(x)}));return {name:s.name,t:s.t,bars:s.bars.length,roots:r}}),breaks:breaks.map(b=>beats[b]),content,duration:dur,bars:bars.map(b=>({t:b.t0,ch:b.ch}))};
 }
 
 function fmtT(s){s=Math.max(0,Math.floor(s));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
@@ -1884,42 +1924,100 @@ async function decodeAudio(file){
   for(let c=0;c<ab.numberOfChannels;c++){const d=ab.getChannelData(c);for(let i=0;i<len;i++)x[i]+=d[i]/ab.numberOfChannels}
   return {x,sr,cut:ab.length>len};
 }
-async function runAudio(file){
+/* junta a cifra com letra (PDF/texto) com o que a gravação revelou */
+function keyShift(from,to){
+  const pk=k=>{const m=String(k||'').match(/^([A-G][#b]?)(m?)/);return m&&IDX[m[1]]!==undefined?{r:IDX[m[1]],m:!!m[2]}:null};
+  const a=pk(from),b=pk(to);if(!a||!b)return 0;
+  const ra=a.m?(a.r+3)%12:a.r,rb=b.m?(b.r+3)%12:b.r; // compara pela tonalidade relativa maior
+  return normSemis(rb-ra);
+}
+function chartSections(content){
+  const out=[];let cur={name:'Início',roots:[]};out.push(cur);
+  const add=n=>{const r=(n.match(/^[A-G][#b]?/)||[])[0];if(r&&cur.roots[cur.roots.length-1]!==r)cur.roots.push(r)};
+  content.split('\n').forEach(line=>{
+    const t=classify(line);
+    const br=line.match(/^\s*\[([^\]]+)\]/);
+    if(t==='sec'||(br&&!isChord(br[1].trim())&&t==='ch')){cur={name:(br?br[1]:line.replace(/:$/,'')).trim(),roots:[]};out.push(cur);if(t!=='ch')return}
+    if(t==='ch')line.trim().split(/\s+/).forEach(tok=>{const {core}=tokInfo(tok);if(isChord(core))add(core)});
+    else if(t==='cp')(line.match(/\[([^\]]+)\]/g)||[]).forEach(x=>{if(isChord(x.slice(1,-1)))add(x.slice(1,-1))});
+  });
+  return out.filter(s=>s.roots.length);
+}
+function rootSim(a,b){
+  const big=x=>{const s=new Set();for(let i=0;i+1<x.length;i++)s.add(x[i]+'>'+x[i+1]);return s};
+  const A=big(a),B=big(b);let inter=0;A.forEach(x=>{if(B.has(x))inter++});
+  const j2=inter/Math.max(1,A.size+B.size-inter);
+  const U=new Set(a),V=new Set(b);let i1=0;U.forEach(x=>{if(V.has(x))i1++});
+  return 0.7*j2+0.3*i1/Math.max(1,U.size+V.size-i1);
+}
+function combineChart(res,text){
+  const c=cleanImport(text);
+  const ck=c.key||detectKey(c.content),semis=keyShift(ck,res.key);
+  const flat=keyFlat(ck,semis);
+  const content=semis?transposeText(c.content,semis,flat):c.content;
+  const key=semis&&ck?transposeChord(ck,semis,flat):(ck||res.key);
+  const cs=chartSections(content);
+  const steps=res.sections.map(sec=>{let best=null,bs=0;cs.forEach(x=>{const v=rootSim(sec.roots,x.roots);if(v>bs){bs=v;best=x}});
+    return {name:best&&bs>=0.25&&best.name!=='Início'?best.name:sec.name,t:sec.t}});
+  const road=[];steps.forEach(s=>{if(!road.length||road[road.length-1].name!==s.name)road.push(s)});
+  const roteiro=road.map(s=>`${s.name} (${fmtT(s.t)})`).join(' → ');
+  const notes=[c.notes,`${res.bpm} BPM`,semis?`cifra transposta ${semis>0?'+':''}${semis} para o tom da gravação (${key})`:`tom da gravação: ${key}`].filter(Boolean).join(' · ');
+  return {title:c.title,artist:c.artist,key,bpm:String(res.bpm),notes,semis,chartKey:ck,
+    content:`@Roteiro da gravação: ${roteiro}\n\n${content}`};
+}
+async function runAudio(file,tempo){
   const out=document.getElementById('audOut');if(!out)return;stopAudio();
   out.innerHTML=`<div class="hint" style="margin-bottom:6px" id="audStep">Abrindo “${esc(file.name)}”…</div><div class="bar"><i id="audBar"></i></div>`;
   let res,dec;
   try{
-    dec=await decodeAudio(file);
-    res=await auAnalyze(dec.x,dec.sr,(p,t)=>{const b=document.getElementById('audBar');if(b)b.style.width=Math.round(p*100)+'%';const st=document.getElementById('audStep');if(st&&t)st.textContent=t});
+    dec=AUD_CACHE&&AUD_CACHE.file===file?AUD_CACHE.dec:await decodeAudio(file);
+    AUD_CACHE={file,dec};
+    res=await auAnalyze(dec.x,dec.sr,(p,t)=>{const b=document.getElementById('audBar');if(b)b.style.width=Math.round(p*100)+'%';const st=document.getElementById('audStep');if(st&&t)st.textContent=t},{tempo});
   }catch(e){out.innerHTML=`<div class="info warn">Não consegui analisar esse arquivo. Tente MP3, M4A ou WAV.</div>`;return}
   if(!document.getElementById('audOut'))return;
   if(!res.segs.length){out.innerHTML='<div class="info warn">Não encontrei acordes nesse áudio.</div>';return}
-  const url=URL.createObjectURL(file);
-  out.innerHTML=`<audio controls src="${url}" id="audEl"></audio>
-    <div class="chips"><span class="chip">Tom: <b>${esc(res.key)}</b></span><span class="chip">Andamento: <b>${res.bpm} BPM</b></span><span class="chip">${res.sections.length} partes</span>
-      ${Math.abs(res.tuning)>=10?`<span class="chip">Afinação: <b>${res.tuning>0?'+':''}${res.tuning} cents</b></span>`:''}${res.breaks.length?`<span class="chip">${res.breaks.length} parada(s)</span>`:''}${dec.cut?'<span class="chip">Analisados os primeiros 10 min</span>':''}</div>
+  AUD={audio:null,url:URL.createObjectURL(file),res,file,dec,mode:null};
+  drawAudioResult();
+}
+let AUD_CACHE=null;
+function drawAudioResult(){
+  const out=document.getElementById('audOut');if(!out||!AUD)return;
+  const {res,file,dec}=AUD;
+  const comb=IMP.chart?combineChart(res,IMP.chart.text):null;
+  if(!AUD.mode)AUD.mode=comb?'comb':'audio';if(!comb)AUD.mode='audio';
+  const view=AUD.mode==='comb'?comb:null;
+  const t=AUD.audio?AUD.audio.currentTime:0;
+  out.innerHTML=`<audio controls src="${AUD.url}" id="audEl"></audio>
+    <div class="chips"><span class="chip">Tom da gravação: <b>${esc(res.key)}</b></span><span class="chip">Andamento: <b>${res.bpm} BPM</b></span>
+      <button class="btn sm" data-tempo="half" title="Use se a música for lenta e o andamento parecer o dobro">½ andamento</button><button class="btn sm" data-tempo="double" title="Use se o andamento parecer a metade">2× andamento</button>
+      <span class="chip">${res.sections.length} partes</span>${Math.abs(res.tuning)>=10?`<span class="chip">Afinação: <b>${res.tuning>0?'+':''}${res.tuning} cents</b></span>`:''}${res.breaks.length?`<span class="chip">${res.breaks.length} parada(s)</span>`:''}${dec.cut?'<span class="chip">Analisados os primeiros 10 min</span>':''}</div>
+    ${comb?`<div class="chips"><button class="btn sm ${AUD.mode==='comb'?'primary':''}" data-mode="comb">📄+🎧 Cifra com letra + gravação</button><button class="btn sm ${AUD.mode==='audio'?'primary':''}" data-mode="audio">🎧 Só a cifra gerada do áudio</button></div>
+      <div class="info">${comb.semis?`A cifra está em <b>${esc(comb.chartKey)}</b> e a gravação em <b>${esc(res.key)}</b> — transpus a cifra <b>${comb.semis>0?'+':''}${comb.semis}</b>.`:`A cifra (${esc(comb.chartKey||'—')}) está no mesmo tom da gravação.`} O roteiro mostra a ordem das partes nesta versão.</div>`:''}
     <div class="ptitle">Partes — toque para ouvir</div>
     <div class="chips" id="audSec">${res.sections.map(s=>`<button class="btn sm" data-t="${s.t}">${esc(s.name)} · ${fmtT(s.t)}</button>`).join('')}</div>
-    <div class="ptitle">Cifra gerada</div>
-    <div class="sheet" style="padding:10px 12px;font-size:14px;max-height:280px;overflow:auto;border:1px solid var(--line);border-radius:10px">${renderSheet(res.content,0,false,true)}</div>
+    <div class="ptitle">${view?'Cifra final (letra da cifra + dados da gravação)':'Cifra gerada do áudio'}</div>
+    <div class="sheet" style="padding:10px 12px;font-size:14px;max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:10px">${renderSheet(view?view.content:res.content,0,false,true)}</div>
     <div class="ptitle">Acordes no tempo — o atual acende enquanto toca</div>
     <div class="tl" id="audTl">${res.segs.map((g,i)=>`<button data-k="${i}" data-t="${g.t0}"><b>${esc(g.c)}</b><small>${fmtT(g.t0)}</small></button>`).join('')}</div>
-    <p class="hint">Reconhece acordes maiores, menores, com 7ª, 7M, sus4 e diminutos, inversões pelo baixo, andamento, compassos, partes da música e paradas. A letra e as frases melódicas não são transcritas — complete no editor. Confira de ouvido: gravações com muita distorção ou mixagem densa podem trocar acordes parecidos.</p>`;
-  const audio=out.querySelector('#audEl');AUD={audio,url};
+    <p class="hint">${comb?'':'<b>A letra não pode ser tirada do áudio.</b> Para ter a música completa, anexe acima a cifra com letra (PDF ou texto). '}Confira de ouvido: gravações ao vivo com teclado sustentando notas, muitos efeitos ou mixagem densa podem trocar acordes parecidos.</p>`;
+  const audio=out.querySelector('#audEl');AUD.audio=audio;if(t)audio.currentTime=t;
   const btns=[...out.querySelectorAll('#audTl button')];let cur=-1;
-  audio.addEventListener('timeupdate',()=>{const t=audio.currentTime;let k=res.segs.findIndex(g=>t>=g.t0&&t<g.t1);
+  audio.addEventListener('timeupdate',()=>{const tt=audio.currentTime;let k=res.segs.findIndex(g=>tt>=g.t0&&tt<g.t1);
     if(k!==cur){if(cur>=0&&btns[cur])btns[cur].classList.remove('cur');cur=k;if(k>=0){btns[k].classList.add('cur');btns[k].scrollIntoView({block:'nearest'})}}});
-  out.addEventListener('click',e=>{const b=e.target.closest('[data-t]');if(!b)return;audio.currentTime=+b.dataset.t;audio.play().catch(()=>{})});
+  out.onclick=e=>{
+    const md=e.target.closest('[data-mode]');if(md){AUD.mode=md.dataset.mode;drawAudioResult();return}
+    const tp=e.target.closest('[data-tempo]');if(tp){runAudio(file,tp.dataset.tempo);return}
+    const b=e.target.closest('[data-t]');if(!b)return;audio.currentTime=+b.dataset.t;audio.play().catch(()=>{})};
   const foot=document.getElementById('impFoot');
   foot.innerHTML=`<button class="btn" data-i="cancel">Fechar</button><button class="btn primary" data-i="mk">Criar música com essa cifra</button>`;
   foot.onclick=e=>{const b=e.target.closest('[data-i]');if(!b)return;
     if(b.dataset.i==='cancel'){stopAudio();IMP.m.close();return}
     const L=IMP.link&&(IMP.link.kind==='yt'||IMP.link.kind==='ref')?IMP.link:null;
-    stopAudio();IMP.m.close();
     const extra={};if(L){extra.links={};extra.links[L.kind==='yt'?'youtube':/spotify/i.test(L.site)?'spotify':'deezer']=L.url}
-    startImported({title:titleCase(file.name.replace(/\.[^.]+$/,'').replace(/[-_]+/g,' ')),key:res.key,bpm:String(res.bpm),
-      notes:`Cifra gerada do áudio (${res.bpm} BPM${Math.abs(res.tuning)>=10?`, afinação ${res.tuning>0?'+':''}${res.tuning} cents`:''}) — confira de ouvido e escreva a letra.`,
-      content:res.content},extra);
+    const base={title:titleCase(file.name.replace(/\.[^.]+$/,'').replace(/[-_]+/g,' ')),key:res.key,bpm:String(res.bpm),
+      notes:`Cifra gerada do áudio (${res.bpm} BPM${Math.abs(res.tuning)>=10?`, afinação ${res.tuning>0?'+':''}${res.tuning} cents`:''}) — confira de ouvido e escreva a letra.`,content:res.content};
+    const r=view?{...base,...view,title:view.title||base.title}:base;
+    stopAudio();IMP.m.close();startImported(r,extra);
   };
 }
 
