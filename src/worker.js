@@ -2,97 +2,9 @@
 // Login com sessão em cookie, convites, troca de senha, administração de usuários
 // e armazenamento das músicas e repertórios de cada usuário.
 
-const SESSION_DAYS = 30;
-const INVITE_DAYS = 7;
-const PBKDF2_ITER = 100000; // limite do Web Crypto nos Workers
-const MIN_PASSWORD = 6;
-const MAX_FAILS = 5;
-const LOCK_MINUTES = 15;
-const COOKIE = 'nn_s';
-
-const enc = new TextEncoder();
-const now = () => Math.floor(Date.now() / 1000);
-
-function b64(bytes) { let s = ''; for (const b of bytes) s += String.fromCharCode(b); return btoa(s); }
-function unb64(str) { const s = atob(str); const out = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i); return out; }
-function b64url(bytes) { return b64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
-function randomToken(n = 32) { return b64url(crypto.getRandomValues(new Uint8Array(n))); }
-async function sha256(str) { const d = await crypto.subtle.digest('SHA-256', enc.encode(str)); return b64(new Uint8Array(d)); }
-function safeEqual(a, b) { if (a.length !== b.length) return false; let r = 0; for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i); return r === 0; }
-
-async function hashPassword(password, saltB64, iter) {
-  const key = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: unb64(saltB64), iterations: iter }, key, 256);
-  return b64(new Uint8Array(bits));
-}
-async function newPasswordFields(password) {
-  const salt = b64(crypto.getRandomValues(new Uint8Array(16)));
-  return { hash: await hashPassword(password, salt, PBKDF2_ITER), salt, iter: PBKDF2_ITER };
-}
-
-function json(data, status = 200, extra = {}) {
-  return new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...extra } });
-}
-const err = (status, message) => json({ error: message }, status);
-function sessionCookie(token, maxAge) {
-  return `${COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
-}
-function readCookie(req, name) {
-  const c = req.headers.get('cookie') || '';
-  for (const part of c.split(/;\s*/)) { const i = part.indexOf('='); if (i > 0 && part.slice(0, i) === name) return part.slice(i + 1); }
-  return null;
-}
-async function body(req) { try { return await req.json(); } catch { return {}; } }
-const cleanEmail = e => String(e || '').trim().toLowerCase();
-const validEmail = e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) && e.length <= 200;
-const publicUser = u => ({ id: u.id, email: u.email, name: u.name, role: u.role, status: u.status, isMaster: !!u.is_master,
-  planId: u.plan_id || 'gratuito', mustChangePassword: !!u.must_change_password });
-const isStaff = u => u.role === 'admin' || !!u.is_master;
-function planOut(p) {
-  let features = []; try { features = JSON.parse(p.features); } catch {}
-  return { id: p.id, name: p.name, description: p.description, priceCents: p.price_cents, currency: p.currency, interval: p.billing_interval,
-    maxSongs: p.max_songs, maxSetlists: p.max_setlists, features, active: !!p.active, isDefault: !!p.is_default, sort: p.sort };
-}
-async function planOf(env, u) {
-  return await env.DB.prepare('SELECT * FROM plans WHERE id = ?').bind(u.plan_id || 'gratuito').first();
-}
-
-async function currentUser(req, env) {
-  const tok = readCookie(req, COOKIE);
-  if (!tok) return null;
-  const row = await env.DB.prepare(
-    `SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
-     WHERE s.token_hash = ? AND s.expires_at > ? AND u.status = 'active'`
-  ).bind(await sha256(tok), now()).first();
-  return row || null;
-}
-async function startSession(env, req, userId) {
-  const tok = randomToken();
-  const exp = now() + SESSION_DAYS * 86400;
-  await env.DB.prepare('INSERT INTO sessions (token_hash, user_id, expires_at, user_agent) VALUES (?, ?, ?, ?)')
-    .bind(await sha256(tok), userId, exp, (req.headers.get('user-agent') || '').slice(0, 200)).run();
-  await env.DB.prepare('DELETE FROM sessions WHERE user_id = ? AND expires_at < ?').bind(userId, now()).run();
-  return sessionCookie(tok, SESSION_DAYS * 86400);
-}
-async function createLinkToken(env, userId, purpose) {
-  const tok = randomToken();
-  await env.DB.prepare('DELETE FROM invites WHERE user_id = ? AND used_at IS NULL').bind(userId).run();
-  await env.DB.prepare('INSERT INTO invites (token_hash, user_id, purpose, expires_at) VALUES (?, ?, ?, ?)')
-    .bind(await sha256(tok), userId, purpose, now() + INVITE_DAYS * 86400).run();
-  return tok;
-}
-
-/* ---------- conversão entre o banco e o formato do app ---------- */
-function songOut(r, me) {
-  let tags = []; try { tags = JSON.parse(r.tags); } catch {}
-  return { id: r.id, type: 'song', title: r.title, artist: r.artist, key: r.song_key, bpm: r.bpm, tags, notes: r.notes, link: r.link, content: r.content, transpose: r.transpose, catalog: !!r.is_public, mine: !!me && r.user_id === me.id, updated: r.updated_at * 1000 };
-}
-function setOut(r) {
-  let items = []; try { items = JSON.parse(r.items); } catch {}
-  return { id: r.id, type: 'set', name: r.name, date: r.set_date, items, updated: r.updated_at * 1000 };
-}
-const str = (v, max) => String(v ?? '').slice(0, max);
-const validId = id => /^[A-Za-z0-9_-]{1,80}$/.test(id);
+import { SESSION_DAYS, INVITE_DAYS, PBKDF2_ITER, MIN_PASSWORD, MAX_FAILS, LOCK_MINUTES, COOKIE, enc, now, b64, unb64, b64url, randomToken, sha256, safeEqual, hashPassword, newPasswordFields, json, err, sessionCookie, readCookie, body, cleanEmail, validEmail, publicUser, isStaff, planOut, planOf, currentUser, startSession, createLinkToken, songOut, setOut, str, validId } from './lib.js';
+import { groupRoutes, setsForUser } from './groups.js';
+import { financeRoutes, myBilling } from './finance.js';
 
 /* ---------- rotas ---------- */
 async function api(req, env, url) {
@@ -191,12 +103,21 @@ async function api(req, env, url) {
   const staff = isStaff(me);
 
   if (path === '/api/data' && m === 'GET') {
-    const [songs, sets] = await env.DB.batch([
-      env.DB.prepare('SELECT * FROM songs WHERE (user_id = ? OR is_public = 1) AND deleted = 0').bind(me.id),
-      env.DB.prepare('SELECT * FROM setlists WHERE user_id = ? AND deleted = 0').bind(me.id),
-    ]);
-    return json({ songs: songs.results.map(r => songOut(r, me)), sets: sets.results.map(setOut) });
+    const songs = await env.DB.prepare('SELECT * FROM songs WHERE (user_id = ? OR is_public = 1) AND deleted = 0').bind(me.id).all();
+    const visible = new Set(songs.results.map(r => r.id));
+    const { sets, extra } = await setsForUser(env, me, visible);
+    return json({
+      songs: songs.results.map(r => songOut(r, me)).concat(extra.map(r => ({ ...songOut(r, me), shared: true }))),
+      sets,
+    });
   }
+
+  if (path === '/api/my/billing' && m === 'GET') return myBilling(env, me);
+
+  const g = await groupRoutes(req, env, url, path, m, me);
+  if (g) return g;
+  const f = await financeRoutes(req, env, url, path, m, me);
+  if (f) return f;
 
   let mm = path.match(/^\/api\/songs\/([^/]+)$/);
   if (mm) {
@@ -234,42 +155,6 @@ async function api(req, env, url) {
     }
   }
 
-  mm = path.match(/^\/api\/sets\/([^/]+)$/);
-  if (mm) {
-    const id = mm[1];
-    if (!validId(id)) return err(400, 'Identificador inválido.');
-    const owner = await env.DB.prepare('SELECT user_id FROM setlists WHERE id = ?').bind(id).first();
-    if (owner && owner.user_id !== me.id) return err(404, 'Não encontrado.');
-    if (m === 'DELETE') { await env.DB.prepare('DELETE FROM setlists WHERE id = ? AND user_id = ?').bind(id, me.id).run(); return json({ ok: true }); }
-    if (m === 'PUT') {
-      const s = await body(req);
-      if (!owner && !staff) {
-        const lim = await planOf(env, me);
-        if (lim && lim.max_setlists != null) {
-          const c = await env.DB.prepare('SELECT COUNT(*) AS n FROM setlists WHERE user_id = ?').bind(me.id).first();
-          if (c.n >= lim.max_setlists) return err(402, `Seu plano (${lim.name}) permite até ${lim.max_setlists} repertórios.`);
-        }
-      }
-      const items = (Array.isArray(s.items) ? s.items : []).slice(0, 300)
-        .filter(it => it && validId(String(it.songId)))
-        .map(it => {
-          const o = { songId: String(it.songId), transpose: Math.max(-11, Math.min(11, parseInt(it.transpose) || 0)) };
-          if (typeof it.content === 'string') o.content = it.content.slice(0, 100000);
-          if (typeof it.notes === 'string') o.notes = it.notes.slice(0, 1000);
-          return o;
-        });
-      const itemsJson = JSON.stringify(items);
-      if (itemsJson.length > 1500000) return err(413, 'Repertório muito grande.');
-      await env.DB.prepare(
-        `INSERT INTO setlists (id, user_id, name, set_date, items, updated_at) VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET name = excluded.name, set_date = excluded.set_date, items = excluded.items,
-           updated_at = excluded.updated_at, deleted = 0
-         WHERE setlists.user_id = excluded.user_id`
-      ).bind(id, me.id, str(s.name, 200), str(s.date, 10), itemsJson, now()).run();
-      return json({ ok: true });
-    }
-  }
-
   if (path === '/api/plans' && m === 'GET') {
     const r = await env.DB.prepare('SELECT * FROM plans WHERE active = 1 ORDER BY sort, price_cents').all();
     return json({ plans: r.results.map(planOut) });
@@ -285,7 +170,9 @@ async function api(req, env, url) {
       const r = await env.DB.prepare(
         `SELECT u.id, u.email, u.name, u.role, u.status, u.is_master, u.plan_id, u.plan_expires_at, u.created_at, u.last_login_at,
            (SELECT COUNT(*) FROM songs s WHERE s.user_id = u.id AND s.is_public = 0) AS songs,
-           (SELECT COUNT(*) FROM setlists t WHERE t.user_id = u.id) AS sets
+           (SELECT COUNT(*) FROM setlists t WHERE t.user_id = u.id) AS sets,
+           (SELECT status FROM subscriptions x WHERE x.user_id = u.id AND x.status != 'cancelada' ORDER BY x.created_at DESC LIMIT 1) AS sub_status,
+           (SELECT COUNT(*) FROM charges c WHERE c.user_id = u.id AND c.status = 'pendente' AND c.due_date < date('now', '-4 hours')) AS overdue
          FROM users u ORDER BY u.is_master DESC, u.role = 'admin' DESC, u.name COLLATE NOCASE`
       ).all();
       return json({ users: r.results });
@@ -319,8 +206,8 @@ async function api(req, env, url) {
       if (targetStaff && !master && id !== me.id) return needMaster();
 
       if (!action && m === 'PATCH') {
-        if (!master) return needMaster();
         const b = await body(req);
+        if (!master && (b.role !== undefined || b.plan_id !== undefined || b.plan_expires_at !== undefined)) return needMaster();
         const sets = [], vals = [];
         if (b.role !== undefined && !u.is_master) { sets.push('role = ?'); vals.push(b.role === 'admin' ? 'admin' : 'member'); }
         if (b.plan_id !== undefined) {
@@ -356,7 +243,9 @@ async function api(req, env, url) {
           env.DB.prepare('DELETE FROM invites WHERE user_id = ?').bind(id),
           env.DB.prepare('DELETE FROM songs WHERE user_id = ? AND is_public = 0').bind(id),
           env.DB.prepare('UPDATE songs SET user_id = ? WHERE user_id = ? AND is_public = 1').bind(me.id, id),
+          env.DB.prepare('DELETE FROM setlist_members WHERE user_id = ? OR setlist_id IN (SELECT id FROM setlists WHERE user_id = ?)').bind(id, id),
           env.DB.prepare('DELETE FROM setlists WHERE user_id = ?').bind(id),
+          env.DB.prepare('DELETE FROM subscriptions WHERE user_id = ?').bind(id),
           env.DB.prepare('DELETE FROM users WHERE id = ?').bind(id),
         ]);
         return json({ ok: true });

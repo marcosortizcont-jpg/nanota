@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0f1115">
+<title>Financeiro — NaNota</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/admin.css">
+</head>
+<body>
+<main class="wrap" id="app"><div class="gate">Carregando…</div></main>
+<script src="/admin.js"></script>
+<script>
+'use strict';
+const TABS = [['resumo', '📊 Resumo'], ['cobrancas', '🧾 Cobranças'], ['assinaturas', '🔁 Assinaturas'], ['planos', '💳 Planos'], ['config', '⚙️ Recebimento']];
+const METHODS = { pix: 'PIX', dinheiro: 'Dinheiro', transferencia: 'Transferência', cartao: 'Cartão', boleto: 'Boleto', outro: 'Outro' };
+const IV = { month: 'Mensal', year: 'Anual', none: 'Sem cobrança' };
+const qs = new URLSearchParams(location.search);
+let TAB = 'resumo', USERS = [], PLANS = [];
+const C = { status: 'todos', month: '', user: qs.get('usuario') || '' };
+if (C.user) TAB = 'cobrancas';
+let MONTH = todayStr().slice(0, 7);
+const stBadge = s => ({ pendente: '<span class="badge warn">pendente</span>', vencido: '<span class="badge bad">vencida</span>', pago: '<span class="badge ok">paga</span>', cancelado: '<span class="badge">cancelada</span>',
+  ativa: '<span class="badge ok">ativa</span>', suspensa: '<span class="badge warn">suspensa</span>', cancelada: '<span class="badge">cancelada</span>' })[s] || esc(s);
+const userOpts = sel => USERS.filter(u => u.status !== 'disabled').map(u => `<option value="${u.id}" ${u.id === sel ? 'selected' : ''}>${esc(u.name || u.email)} — ${esc(u.email)}</option>`).join('');
+const planOpts = sel => PLANS.map(p => `<option value="${esc(p.id)}" ${p.id === sel ? 'selected' : ''}>${esc(p.name)} — ${money(p.priceCents, p.interval)}</option>`).join('');
+
+async function refs() { const [u, p] = await Promise.all([api('GET', '/api/admin/users'), api('GET', '/api/admin/plans')]); USERS = u.users; PLANS = p.plans; }
+function frame(inner) {
+  $('#app').innerHTML = `<h1>💰 Financeiro</h1><div class="tabs">${TABS.map(([k, l]) => `<button data-tab="${k}" class="${k === TAB ? 'act' : ''}">${l}</button>`).join('')}</div><div id="pane">${inner}</div>`;
+}
+async function show(tab) {
+  TAB = tab || TAB; frame('<div class="empty">Carregando…</div>');
+  try { await ({ resumo, cobrancas, assinaturas, planos, config })[TAB](); } catch (e) { $('#pane').innerHTML = `<div class="info warn">${esc(e.message)}</div>`; }
+}
+
+/* ---------- Resumo ---------- */
+async function resumo() {
+  const d = await api('GET', '/api/fin/summary?month=' + MONTH);
+  const max = Math.max(1, ...d.series.map(x => x.v));
+  const months = []; { const [y, m] = d.today.split('-').map(Number); for (let i = 11; i >= 0; i--) { const t = new Date(Date.UTC(y, m - 1 - i, 1)); months.push(t.toISOString().slice(0, 7)); } }
+  const val = k => (d.series.find(x => x.mes === k) || { v: 0 }).v;
+  $('#pane').innerHTML = `
+    <div class="toolbar"><label class="muted small">Mês</label><input type="month" id="mon" value="${MONTH}"><div class="sp"></div>
+      <button class="btn primary" id="gen" title="Cria as cobranças das assinaturas ativas que vencem até o fim do mês escolhido">⚡ Gerar cobranças do mês</button></div>
+    <div class="cards">
+      <div class="card ok"><div class="l">Recebido no mês</div><div class="v">${money(d.received.v)}</div><div class="s">${d.received.n} pagamento(s)</div></div>
+      <div class="card warn"><div class="l">A receber no mês</div><div class="v">${money(d.toReceive.v)}</div><div class="s">${d.toReceive.n} cobrança(s) pendente(s)</div></div>
+      <div class="card bad"><div class="l">Vencido (total)</div><div class="v">${money(d.overdue.v)}</div><div class="s">${d.overdue.n} cobrança(s) em atraso</div></div>
+      <div class="card"><div class="l">Assinaturas ativas</div><div class="v">${d.activeSubs}</div><div class="s">receita recorrente ${money(d.mrr)}/mês</div></div>
+    </div>
+    <div class="grid2">
+      <div class="box"><h3>Recebimentos — últimos 12 meses</h3><div class="bars">${months.map(k => `<div title="${money(val(k))}"><i style="height:${Math.round(val(k) / max * 100)}%"></i><span>${k.slice(5)}/${k.slice(2, 4)}</span></div>`).join('')}</div></div>
+      <div class="box"><h3>Por plano</h3><table class="tbl"><thead><tr><th>Plano</th><th class="num">Usuários</th><th class="num">Assinaturas</th><th class="num">Receita/ciclo</th></tr></thead><tbody>
+        ${d.byPlan.map(p => `<tr><td>${esc(p.name)}</td><td class="num">${(d.usersByPlan.find(x => x.plan_id === p.id) || { n: 0 }).n}</td><td class="num">${p.n}</td><td class="num">${money(p.v)}</td></tr>`).join('')}</tbody></table></div>
+    </div>
+    <div class="info">A confirmação dos pagamentos é manual: quando o valor cair na sua conta, dê baixa na cobrança (🧾 Cobranças → Dar baixa). A estrutura já está pronta para ligar um intermediador (Mercado Pago, Asaas, Stripe) e confirmar sozinho no futuro.</div>`;
+  $('#mon').onchange = e => { MONTH = e.target.value || MONTH; show(); };
+  $('#gen').onclick = async () => {
+    const [y, m] = MONTH.split('-').map(Number); const until = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+    try { const r = await api('POST', '/api/fin/generate', { until }); toast(r.created ? `${r.created} cobrança(s) criada(s).` : 'Nenhuma cobrança nova para gerar.'); show(); } catch (e) { toast(e.message); }
+  };
+}
+
+/* ---------- Cobranças ---------- */
+async function cobrancas() {
+  const p = new URLSearchParams({ status: C.status }); if (C.month) p.set('month', C.month); if (C.user) p.set('user_id', C.user);
+  const d = await api('GET', '/api/fin/charges?' + p);
+  const tot = s => d.charges.filter(c => c.status_view === s).reduce((a, c) => a + (s === 'pago' ? (c.paid_cents ?? c.amount_cents) : c.amount_cents), 0);
+  $('#pane').innerHTML = `
+    <div class="toolbar">
+      <select id="cs">${[['todos', 'Todas'], ['pendente', 'Pendentes'], ['vencido', 'Vencidas'], ['pago', 'Pagas'], ['cancelado', 'Canceladas']].map(([v, l]) => `<option value="${v}" ${C.status === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      <input type="month" id="cm" value="${C.month}" title="Vencimento ou pagamento no mês">
+      <select id="cu"><option value="">Todos os usuários</option>${userOpts(C.user)}</select>
+      <div class="sp"></div><button class="btn primary" id="cn">+ Nova cobrança</button></div>
+    <div class="chips" style="margin-bottom:10px"><span class="badge warn">pendente ${money(tot('pendente'))}</span><span class="badge bad">vencido ${money(tot('vencido'))}</span><span class="badge ok">pago ${money(tot('pago'))}</span></div>
+    ${d.charges.length ? `<div class="tblwrap"><table class="tbl"><thead><tr><th>Usuário</th><th>Descrição</th><th class="num">Valor</th><th>Vencimento</th><th>Situação</th><th>Pagamento</th><th></th></tr></thead><tbody>
+    ${d.charges.map(c => `<tr><td><b>${esc(c.name || '—')}</b><div class="muted small">${esc(c.email || '')}</div></td><td>${esc(c.description)}${c.plan_name ? `<div class="muted small">${esc(c.plan_name)}</div>` : ''}</td>
+      <td class="num">${money(c.amount_cents)}</td><td>${fmtDate(c.due_date)}</td><td>${stBadge(c.status_view)}</td>
+      <td class="small">${c.status === 'pago' ? `${fmtDate(c.paid_at)} · ${METHODS[c.method] || '—'}${c.paid_cents != null && c.paid_cents !== c.amount_cents ? `<br>${money(c.paid_cents)}` : ''}` : '—'}</td>
+      <td><div class="acts">${c.status === 'pendente' ? `<button class="btn sm primary" data-pay="${c.id}">Dar baixa</button><button class="btn sm" data-pix="${c.id}">PIX</button><button class="btn sm" data-ced="${c.id}">Editar</button><button class="btn sm danger" data-ccan="${c.id}">Cancelar</button>`
+        : `<button class="btn sm" data-reo="${c.id}">Reabrir</button>`}</div></td></tr>`).join('')}
+    </tbody></table></div>` : '<div class="empty">Nenhuma cobrança com esses filtros.</div>'}`;
+  $('#cs').onchange = e => { C.status = e.target.value; show(); };
+  $('#cm').onchange = e => { C.month = e.target.value; show(); };
+  $('#cu').onchange = e => { C.user = e.target.value; show(); };
+  $('#cn').onclick = () => chargeForm();
+  $('#pane').onclick = async e => {
+    const t = e.target, f = (a) => (t.closest(`[data-${a}]`) || {}).dataset;
+    const c = id => d.charges.find(x => x.id === id);
+    try {
+      if (f('pay')) return payForm(c(f('pay').pay));
+      if (f('pix')) return pixView(c(f('pix').pix));
+      if (f('ced')) return chargeForm(c(f('ced').ced));
+      if (f('ccan')) { if (!(await confirmBox('Cancelar esta cobrança?', 'Cancelar cobrança'))) return; await api('PATCH', '/api/fin/charges/' + f('ccan').ccan, { action: 'cancel' }); toast('Cobrança cancelada.'); show(); }
+      if (f('reo')) { if (!(await confirmBox('Reabrir esta cobrança? Se estava paga, a baixa é desfeita.', 'Reabrir', false))) return; await api('PATCH', '/api/fin/charges/' + f('reo').reo, { action: 'reopen' }); toast('Cobrança reaberta.'); show(); }
+    } catch (err) { toast(err.message); }
+  };
+}
+function chargeForm(c) {
+  const m = modal(`<div class="mh">${c ? 'Editar cobrança' : 'Nova cobrança'}</div><div class="mb">
+    ${c ? `<p><b>${esc(c.name || c.email)}</b></p>` : `<label class="f">Usuário<select id="fu">${userOpts(C.user)}</select></label>
+    <label class="f">Plano (opcional — preenche o valor)<select id="fp"><option value="">—</option>${planOpts('')}</select></label>`}
+    <label class="f">Descrição<input type="text" id="fd" value="${esc(c ? c.description : '')}" placeholder="ex: Plano Pro — 12/2026"></label>
+    <div class="grid2"><label class="f">Valor (R$)<input type="text" id="fv" inputmode="decimal" value="${c ? centsStr(c.amount_cents) : ''}" placeholder="0,00"></label>
+    <label class="f">Vencimento<input type="date" id="fdt" value="${c ? c.due_date : todayStr()}"></label></div></div>
+    <div class="mf"><button class="btn" data-x="0">Cancelar</button><button class="btn primary" data-x="1">Salvar</button></div>`);
+  const fp = $('#fp', m.el);
+  if (fp) fp.onchange = () => { const p = PLANS.find(x => x.id === fp.value); if (p) { $('#fv', m.el).value = centsStr(p.priceCents); if (!$('#fd', m.el).value) $('#fd', m.el).value = 'Plano ' + p.name; } };
+  m.el.addEventListener('click', async e => {
+    const b = e.target.closest('[data-x]'); if (!b) return; if (b.dataset.x === '0') return m.close();
+    const body = { description: $('#fd', m.el).value, amount_cents: toCents($('#fv', m.el).value), due_date: $('#fdt', m.el).value };
+    try {
+      if (c) await api('PATCH', '/api/fin/charges/' + c.id, { action: 'edit', ...body });
+      else await api('POST', '/api/fin/charges', { ...body, user_id: $('#fu', m.el).value, plan_id: fp.value || undefined });
+      m.close(); toast('Cobrança salva.'); show();
+    } catch (err) { toast(err.message); }
+  });
+}
+function payForm(c) {
+  const m = modal(`<div class="mh">Dar baixa</div><div class="mb"><p><b>${esc(c.name || c.email)}</b> · ${esc(c.description)} · ${money(c.amount_cents)}</p>
+    <div class="grid3"><label class="f">Data do pagamento<input type="date" id="pd" value="${todayStr()}"></label>
+    <label class="f">Valor recebido (R$)<input type="text" id="pv" inputmode="decimal" value="${centsStr(c.amount_cents)}"></label>
+    <label class="f">Forma<select id="pm">${Object.entries(METHODS).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label></div>
+    <label class="f">Observação<input type="text" id="po" placeholder="ex: comprovante enviado pelo WhatsApp"></label></div>
+    <div class="mf"><button class="btn" data-x="0">Cancelar</button><button class="btn primary" data-x="1">Confirmar recebimento</button></div>`);
+  m.el.addEventListener('click', async e => {
+    const b = e.target.closest('[data-x]'); if (!b) return; if (b.dataset.x === '0') return m.close();
+    try { await api('PATCH', '/api/fin/charges/' + c.id, { action: 'pay', paid_at: $('#pd', m.el).value, paid_cents: toCents($('#pv', m.el).value), method: $('#pm', m.el).value, notes: $('#po', m.el).value }); m.close(); toast('Pagamento registrado.'); show(); }
+    catch (err) { toast(err.message); }
+  });
+}
+async function pixView(c) {
+  let pix; try { pix = (await api('GET', `/api/fin/charges/${c.id}/pix`)).pix; } catch (e) { toast(e.message); if (/chave PIX/.test(e.message)) show('config'); return; }
+  const msg = `Olá! Segue o PIX da sua cobrança do NaNota (${c.description}, ${money(c.amount_cents)}, vence ${fmtDate(c.due_date)}):\n\n${pix}`;
+  const m = modal(`<div class="mh">PIX da cobrança</div><div class="mb" style="align-items:center;text-align:center">
+    <p><b>${esc(c.name || c.email)}</b> · ${money(c.amount_cents)} · vence ${fmtDate(c.due_date)}</p><div id="qr"></div>
+    <input type="text" readonly value="${esc(pix)}" class="mono" onclick="this.select()">
+    <div class="chips" style="justify-content:center"><button class="btn primary" data-copy="1">Copiar PIX copia e cola</button><a class="btn" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(msg)}">Enviar pelo WhatsApp</a></div>
+    <p class="small">A pessoa também vê este PIX em 👤 Minha conta → Minha assinatura.</p></div><div class="mf"><button class="btn" data-x="0">Fechar</button></div>`);
+  drawQR($('#qr', m.el), pix, 5);
+  m.el.addEventListener('click', e => { if (e.target.closest('[data-copy]')) copyText(pix); if (e.target.closest('[data-x]')) m.close(); });
+}
+
+/* ---------- Assinaturas ---------- */
+async function assinaturas() {
+  const d = await api('GET', '/api/fin/subscriptions');
+  $('#pane').innerHTML = `
+    <div class="toolbar"><span class="muted small">A assinatura define o plano do usuário e gera as cobranças periódicas (⚡ no Resumo).</span><div class="sp"></div><button class="btn primary" id="sn">+ Nova assinatura</button></div>
+    ${d.subscriptions.length ? `<div class="tblwrap"><table class="tbl"><thead><tr><th>Usuário</th><th>Plano</th><th class="num">Valor</th><th>Ciclo</th><th>Próximo vencimento</th><th>Situação</th><th></th></tr></thead><tbody>
+    ${d.subscriptions.map(s => `<tr><td><b>${esc(s.name || '—')}</b><div class="muted small">${esc(s.email)}</div></td><td>${esc(s.plan_name || s.plan_id)}</td><td class="num">${money(s.price_cents)}</td>
+      <td>${IV[s.billing_interval]}${s.billing_interval !== 'none' ? ` · dia ${s.due_day}` : ''}</td><td>${s.status === 'ativa' ? fmtDate(s.next_due_date) : '—'}${s.overdue ? ` <span class="badge bad">${s.overdue} vencida(s)</span>` : ''}</td>
+      <td>${stBadge(s.status)}</td>
+      <td><div class="acts">${s.status !== 'cancelada' ? `<button class="btn sm" data-sed="${s.id}">Editar</button>
+        ${s.status === 'ativa' ? `<button class="btn sm" data-ssus="${s.id}">Suspender</button>` : `<button class="btn sm" data-sact="${s.id}">Reativar</button>`}
+        <button class="btn sm danger" data-scan="${s.id}">Cancelar</button>` : `<span class="muted small">cancelada em ${fmtDate(s.canceled_at)}</span>`}
+        <a class="btn sm ghost" href="?usuario=${s.user_id}" data-hist="${s.user_id}">🧾</a></div></td></tr>`).join('')}
+    </tbody></table></div>` : '<div class="empty">Nenhuma assinatura ainda.</div>'}`;
+  $('#sn').onclick = () => subForm();
+  $('#pane').onclick = async e => {
+    const t = e.target, f = a => (t.closest(`[data-${a}]`) || {}).dataset;
+    const s = id => d.subscriptions.find(x => x.id === id);
+    try {
+      if (f('hist')) { e.preventDefault(); C.user = f('hist').hist; C.status = 'todos'; return show('cobrancas'); }
+      if (f('sed')) return subForm(s(f('sed').sed));
+      if (f('ssus')) { await api('PATCH', '/api/fin/subscriptions/' + f('ssus').ssus, { status: 'suspensa' }); toast('Assinatura suspensa — o usuário volta ao plano padrão.'); show(); }
+      if (f('sact')) { await api('PATCH', '/api/fin/subscriptions/' + f('sact').sact, { status: 'ativa' }); toast('Assinatura reativada.'); show(); }
+      if (f('scan')) { if (!(await confirmBox('Cancelar esta assinatura? O usuário volta ao plano padrão. Cobranças já criadas continuam na lista.', 'Cancelar assinatura'))) return; await api('PATCH', '/api/fin/subscriptions/' + f('scan').scan, { status: 'cancelada' }); toast('Assinatura cancelada.'); show(); }
+    } catch (err) { toast(err.message); }
+  };
+}
+function subForm(s) {
+  const m = modal(`<div class="mh">${s ? 'Editar assinatura' : 'Nova assinatura'}</div><div class="mb">
+    ${s ? `<p><b>${esc(s.name || s.email)}</b></p>` : `<label class="f">Usuário<select id="su">${userOpts(C.user)}</select></label>`}
+    <label class="f">Plano<select id="sp">${planOpts(s ? s.plan_id : (PLANS.find(p => p.priceCents > 0) || PLANS[0] || {}).id)}</select></label>
+    <div class="grid3"><label class="f">Valor (R$)<input type="text" id="sv" inputmode="decimal" value="${s ? centsStr(s.price_cents) : ''}"></label>
+    ${s ? '' : `<label class="f">Ciclo<select id="si"><option value="month">Mensal</option><option value="year">Anual</option><option value="none">Sem cobrança</option></select></label>`}
+    <label class="f">Dia do vencimento<input type="number" id="sd" min="1" max="28" value="${s ? s.due_day : 10}"></label></div>
+    <label class="f">${s ? 'Próximo vencimento' : 'Primeiro vencimento'}<input type="date" id="sn2" value="${s ? (s.next_due_date || '') : todayStr()}"></label>
+    ${s ? '' : '<p class="small">Se já existir uma assinatura para esse usuário, ela é cancelada e substituída por esta.</p>'}</div>
+    <div class="mf"><button class="btn" data-x="0">Cancelar</button><button class="btn primary" data-x="1">Salvar</button></div>`);
+  const sp = $('#sp', m.el), sv = $('#sv', m.el), si = $('#si', m.el);
+  const fill = () => { const p = PLANS.find(x => x.id === sp.value); if (!p) return; if (!s) { sv.value = centsStr(p.priceCents); if (si) si.value = p.interval === 'year' ? 'year' : p.interval === 'none' ? 'none' : 'month'; } };
+  sp.onchange = () => { if (s) { const p = PLANS.find(x => x.id === sp.value); if (p) sv.value = centsStr(p.priceCents); } else fill(); };
+  if (!s) fill();
+  m.el.addEventListener('click', async e => {
+    const b = e.target.closest('[data-x]'); if (!b) return; if (b.dataset.x === '0') return m.close();
+    try {
+      if (s) await api('PATCH', '/api/fin/subscriptions/' + s.id, { plan_id: sp.value, price_cents: toCents(sv.value), due_day: $('#sd', m.el).value, next_due_date: $('#sn2', m.el).value });
+      else await api('POST', '/api/fin/subscriptions', { user_id: $('#su', m.el).value, plan_id: sp.value, price_cents: toCents(sv.value), billing_interval: si.value, due_day: $('#sd', m.el).value, start_date: $('#sn2', m.el).value });
+      m.close(); toast('Assinatura salva.'); await refs(); show();
+    } catch (err) { toast(err.message); }
+  });
+}
+
+/* ---------- Planos (modelos) ---------- */
+async function planos() {
+  await refs();
+  $('#pane').innerHTML = `
+    <div class="toolbar"><span class="muted small">Modelos de plano: nome, valor, ciclo de cobrança, limites e recursos. Administradores e o master não têm limites; cifras padrão não contam.</span><div class="sp"></div><button class="btn primary" id="pn">+ Novo plano</button></div>
+    <div class="tblwrap"><table class="tbl"><thead><tr><th>Plano</th><th class="num">Valor</th><th>Ciclo</th><th>Limites</th><th class="num">Usuários</th><th>Situação</th><th></th></tr></thead><tbody>
+    ${PLANS.map(p => `<tr><td><b>${esc(p.name)}</b>${p.isDefault ? ' <span class="badge ok">padrão</span>' : ''}<div class="muted small">${esc(p.description || '')}</div>${p.features.length ? `<div class="muted small">✓ ${p.features.map(esc).join(' · ✓ ')}</div>` : ''}</td>
+      <td class="num">${money(p.priceCents)}</td><td>${IV[p.interval] || '—'}</td>
+      <td class="small">${p.maxSongs != null ? p.maxSongs + ' músicas' : 'músicas ilimitadas'}<br>${p.maxSetlists != null ? p.maxSetlists + ' repertórios' : 'repertórios ilimitados'}</td>
+      <td class="num">${p.users}</td><td>${p.active ? '<span class="badge ok">ativo</span>' : '<span class="badge">inativo</span>'}</td>
+      <td><div class="acts"><button class="btn sm" data-ped="${esc(p.id)}">Editar</button>${!p.isDefault ? `<button class="btn sm danger" data-pdel="${esc(p.id)}">Excluir</button>` : ''}</div></td></tr>`).join('')}
+    </tbody></table></div>`;
+  $('#pn').onclick = () => planForm();
+  $('#pane').onclick = async e => {
+    const t = e.target, f = a => (t.closest(`[data-${a}]`) || {}).dataset;
+    if (f('ped')) return planForm(PLANS.find(p => p.id === f('ped').ped));
+    if (f('pdel')) { if (!(await confirmBox('Excluir este plano?', 'Excluir'))) return; try { await api('DELETE', '/api/admin/plans/' + f('pdel').pdel); toast('Plano excluído.'); show(); } catch (err) { toast(err.message); } }
+  };
+}
+const slug = s => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+function planForm(p) {
+  p = p || { id: '', name: '', description: '', priceCents: 0, interval: 'month', maxSongs: null, maxSetlists: null, features: [], active: true, isDefault: false, sort: PLANS.length };
+  const m = modal(`<div class="mh">${p.id ? 'Editar plano' : 'Novo plano'}</div><div class="mb">
+    <div class="grid3"><label class="f">Nome<input type="text" id="qn" value="${esc(p.name)}" placeholder="ex: Pro"></label>
+    <label class="f">Valor (R$)<input type="text" id="qv" inputmode="decimal" value="${centsStr(p.priceCents)}" placeholder="0,00"></label>
+    <label class="f">Ciclo<select id="qi"><option value="month" ${p.interval === 'month' ? 'selected' : ''}>Mensal</option><option value="year" ${p.interval === 'year' ? 'selected' : ''}>Anual</option><option value="none" ${p.interval === 'none' ? 'selected' : ''}>Sem cobrança</option></select></label></div>
+    <label class="f">Descrição<input type="text" id="qd" value="${esc(p.description || '')}" placeholder="Para quem é este plano"></label>
+    <div class="grid3"><label class="f">Limite de músicas próprias<input type="number" id="qs" min="0" value="${p.maxSongs ?? ''}" placeholder="ilimitado"></label>
+    <label class="f">Limite de repertórios<input type="number" id="qr" min="0" value="${p.maxSetlists ?? ''}" placeholder="ilimitado"></label>
+    <label class="f">Ordem de exibição<input type="number" id="qo" value="${p.sort || 0}"></label></div>
+    <label class="f">Recursos (um por linha — aparecem na descrição do plano)<textarea id="qf" rows="3">${esc((p.features || []).join('\n'))}</textarea></label>
+    <label class="chk"><input type="checkbox" id="qa" ${p.active ? 'checked' : ''}> <span>Ativo (pode ser usado em novas assinaturas)</span></label>
+    <label class="chk"><input type="checkbox" id="qp" ${p.isDefault ? 'checked' : ''}> <span>Plano padrão — novos usuários e assinaturas canceladas voltam para ele</span></label></div>
+    <div class="mf"><button class="btn" data-x="0">Cancelar</button><button class="btn primary" data-x="1">Salvar plano</button></div>`);
+  m.el.addEventListener('click', async e => {
+    const b = e.target.closest('[data-x]'); if (!b) return; if (b.dataset.x === '0') return m.close();
+    const name = $('#qn', m.el).value.trim(); let id = p.id || slug(name).slice(0, 40); if (id.length < 2) id = 'plano-' + Date.now().toString(36);
+    const num = v => v === '' ? null : +v;
+    try {
+      await api('PUT', '/api/admin/plans/' + id, { name, description: $('#qd', m.el).value, price_cents: toCents($('#qv', m.el).value), billing_interval: $('#qi', m.el).value,
+        max_songs: num($('#qs', m.el).value), max_setlists: num($('#qr', m.el).value), features: $('#qf', m.el).value.split('\n').map(x => x.trim()).filter(Boolean),
+        active: $('#qa', m.el).checked, is_default: $('#qp', m.el).checked, sort: $('#qo', m.el).value });
+      m.close(); toast('Plano salvo.'); show();
+    } catch (err) { toast(err.message); }
+  });
+}
+
+/* ---------- Configurações de recebimento ---------- */
+async function config() {
+  const s = await api('GET', '/api/fin/settings');
+  $('#pane').innerHTML = `<div class="grid2"><div class="box"><h3>Recebimento por PIX</h3>
+      <div style="display:flex;flex-direction:column;gap:10px">
+      <label class="f">Chave PIX (e-mail, telefone com +55, CPF/CNPJ ou chave aleatória)<input type="text" id="k" value="${esc(s.pix_key || '')}"></label>
+      <div class="grid2"><label class="f">Nome do recebedor (até 25)<input type="text" id="nm" maxlength="25" value="${esc(s.pix_name || '')}"></label>
+      <label class="f">Cidade (até 15)<input type="text" id="ct" maxlength="15" value="${esc(s.pix_city || '')}"></label></div>
+      <label class="f">Instruções para quem paga<textarea id="ins" rows="3" placeholder="ex: Depois de pagar, envie o comprovante no WhatsApp (67) …">${esc(s.pay_instructions || '')}</textarea></label>
+      <div><button class="btn primary" id="sv">Salvar</button></div></div></div>
+    <div class="box"><h3>Teste</h3><p class="muted small">Depois de salvar, gere um PIX de R$ 1,00 e pague pelo app do seu banco para conferir se cai na conta certa.</p>
+      <button class="btn" id="tst" ${s.pix_key ? '' : 'disabled'}>Gerar PIX de teste</button><div id="tout" style="margin-top:10px"></div></div></div>
+    <div class="info">Cada cobrança gera um PIX “copia e cola” com o valor e um identificador próprio. A baixa é manual. Para baixa automática, o próximo passo é integrar um intermediador (Mercado Pago, Asaas ou Stripe) — isso exige abrir conta e gerar as chaves de API nele.</div>`;
+  $('#sv').onclick = async () => {
+    try { await api('PUT', '/api/fin/settings', { pix_key: $('#k').value, pix_name: $('#nm').value, pix_city: $('#ct').value, pay_instructions: $('#ins').value }); toast('Configurações salvas.'); show(); } catch (e) { toast(e.message); }
+  };
+  $('#tst').onclick = async () => {
+    try {
+      if (!ME) return;
+      const r = await api('POST', '/api/fin/charges', { user_id: ME.id, description: 'Teste de PIX', amount_cents: 100, due_date: todayStr() });
+      const pix = (await api('GET', `/api/fin/charges/${r.id}/pix`)).pix;
+      await api('PATCH', '/api/fin/charges/' + r.id, { action: 'cancel' });
+      $('#tout').innerHTML = `<div id="tq"></div><input type="text" readonly class="mono" value="${esc(pix)}" onclick="this.select()" style="margin-top:8px"><p class="muted small">A cobrança de teste já foi cancelada automaticamente.</p>`;
+      drawQR($('#tq'), pix, 4);
+    } catch (e) { toast(e.message); }
+  };
+}
+
+document.addEventListener('click', e => { const t = e.target.closest('[data-tab]'); if (t) show(t.dataset.tab); });
+boot('financeiro', { master: true }).then(async ok => { if (!ok) return; await refs(); show(); }).catch(e => toast(e.message));
+</script>
+</body>
+</html>

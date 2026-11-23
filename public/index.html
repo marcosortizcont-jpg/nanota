@@ -389,7 +389,8 @@ function persist(item,delay){
   (item.type==='set'?S.sets:S.songs)[item.id]=item;
   saveLocal();
   clearTimeout(timers[item.id]);
-  if(delay) timers[item.id]=setTimeout(()=>cloudSet(item),delay); else cloudSet(item);
+  delete timers[item.id];
+  if(delay) timers[item.id]=setTimeout(()=>{delete timers[item.id];cloudSet(item)},delay); else cloudSet(item);
 }
 function removeItem(item){
   delete (item.type==='set'?S.sets:S.songs)[item.id];
@@ -434,6 +435,7 @@ async function initCloud(){
 
 /* ============ Conta NaNota (servidor Cloudflare) ============ */
 let PLAN=null;
+const VER={};
 async function api(method,path,data){
   let r;
   try{r=await fetch(path,{method,credentials:'same-origin',headers:{'content-type':'application/json','x-nanota':'1'},body:data===undefined?undefined:JSON.stringify(data)})}
@@ -447,18 +449,38 @@ function mapErr(e){
   if(e.status===403){showChangePw(true);throw {code:'session'}}
   if(e.status===413)throw {code:'quota_exceeded'};
   if(e.status===402){toast(e.message);setTimeout(()=>loadData(),400);throw {code:'session'}}
-  if(e.status===403&&/padrão/.test(e.message)){toast(e.message);throw {code:'session'}}
+  if(e.status===403&&/padrão|permissão|dono/.test(e.message)){toast(e.message);setTimeout(bgRefresh,300);throw {code:'session'}}
+  if(e.status===409){toast(e.message);setTimeout(bgRefresh,200);throw {code:'session'}}
   if(!e.status||e.status>=500)throw {code:'unavailable'};
   throw {code:'other',message:e.message};
 }
 const APICOL={doc:id=>{
   const base=String(id).startsWith('r-')?'/api/sets/':'/api/songs/';
   return {
-    set:b=>api('PUT',(b.type==='set'?'/api/sets/':'/api/songs/')+encodeURIComponent(id),b).catch(mapErr),
+    set:b=>{
+      if(b.type!=='set')return api('PUT','/api/songs/'+encodeURIComponent(id),b).catch(mapErr);
+      const body={...b,version:VER[id]};delete body.group;
+      return api('PUT','/api/sets/'+encodeURIComponent(id),body).then(r=>{if(r&&r.version){VER[id]=r.version;if(S.sets[id])S.sets[id].version=r.version}return r}).catch(mapErr);
+    },
     delete:()=>api('DELETE',base+encodeURIComponent(id)).catch(mapErr)
   };
 }};
 function useUserCache(){LS_KEY='nanota.data.'+ME.id}
+let bgTimer=null;
+function applyData(d){
+  const songs={},sets={};d.songs.forEach(s=>songs[s.id]=s);d.sets.forEach(s=>{sets[s.id]=s;VER[s.id]=s.version});
+  S.songs=songs;S.sets=sets;saveLocal();
+}
+async function bgRefresh(){
+  if(!ME||MODE!=='cloud'||S.view==='edit'||S.view==='auth'||document.querySelector('.ov')||Object.keys(timers).length)return;
+  try{
+    await Promise.all(Object.values(queues).map(p=>p.catch(()=>{})));
+    const d=await api('GET','/api/data');
+    if(S.view==='edit'||S.view==='auth')return;
+    applyData(d);onData();
+  }catch(e){if(e.status===401)showLogin('Sua sessão expirou. Entre de novo.')}
+}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)bgRefresh()});
 async function initApi(){
   const tok=new URLSearchParams(location.search).get('convite');
   if(tok) return showInvite(tok);
@@ -478,8 +500,10 @@ async function loadData(){
   S.view=S.view==='auth'?'library':S.view;MODE='loading';render();
   try{
     const d=await api('GET','/api/data');
-    const songs={},sets={};d.songs.forEach(s=>songs[s.id]=s);d.sets.forEach(s=>sets[s.id]=s);
-    S.songs=songs;S.sets=sets;COL=APICOL;MODE='cloud';saveLocal();
+    applyData(d);COL=APICOL;MODE='cloud';
+    if(!bgTimer)bgTimer=setInterval(()=>{if(!document.hidden)bgRefresh()},30000);
+    const back=new URLSearchParams(location.search).get('voltar');
+    if(back&&/^\/[a-z0-9-]+\.html$/.test(back)){location.href=back;return}
     if(location.hash==='#repertorios'){S.view='sets';history.replaceState(null,'','/')}
     render();
   }catch(e){
@@ -566,112 +590,97 @@ async function openAccount(){
   try{const r=await api('GET','/api/me');ME=r.user;PLAN=r.plan}catch(e){}
   const m=modal(`<div class="mh">${esc(ME.name||'Minha conta')}</div><div class="mb">
       <p>${esc(ME.email)}</p>
-      <div class="chips"><span class="chip">Perfil: <b>${roleLabel(ME)}</b></span>${PLAN?`<span class="chip">Plano: <b>${esc(PLAN.name)}</b> · ${money(PLAN.priceCents,PLAN.interval)}</span>`:''}</div>
-      ${PLAN&&(PLAN.maxSongs!=null||PLAN.maxSetlists!=null)&&!isStaff()?`<p class="hint">Limites: ${PLAN.maxSongs!=null?PLAN.maxSongs+' músicas próprias':'músicas ilimitadas'} · ${PLAN.maxSetlists!=null?PLAN.maxSetlists+' repertórios':'repertórios ilimitados'}</p>`:''}
+      <div class="chips"><span class="chip">Perfil: <b>${roleLabel(ME)}</b></span>${PLAN?`<span class="chip">Plano: <b>${esc(PLAN.name)}</b></span>`:''}</div>
+      ${isStaff()?`<div class="ptitle" style="margin-top:6px">Módulos</div><div class="chips"><a class="btn" href="/usuarios.html">👥 Usuários</a>${ME.isMaster?'<a class="btn" href="/financeiro.html">💰 Financeiro</a>':''}</div>`:''}
+      <div class="ptitle" style="margin-top:6px">Minha assinatura</div><div id="billBox"><p class="hint">Carregando…</p></div>
     </div>
-    <div class="mf"><button class="btn" data-a="pw">Trocar senha</button>${isStaff()?'<button class="btn" data-a="users">👥 Usuários</button>':''}${ME.isMaster?'<button class="btn" data-a="plans">💳 Planos</button>':''}<button class="btn danger" data-a="out">Sair</button></div>`);
-  m.el.addEventListener('click',e=>{const b=e.target.closest('[data-a]');if(!b)return;m.close();
-    if(b.dataset.a==='pw')showChangePw(false);if(b.dataset.a==='users')openUsers('users');if(b.dataset.a==='plans')openUsers('plans');if(b.dataset.a==='out')logout()});
-}
-function linkBox(link,email,purpose){
-  const msg=(purpose==='reset'?'Use este link para criar uma nova senha no NaNota: ':'Você foi convidado para o NaNota! Crie sua senha aqui: ')+link;
-  return `<div class="info"><b>${purpose==='reset'?'Link de nova senha':'Convite criado'}</b> para ${esc(email)} — vale por 7 dias e só pode ser usado uma vez. Envie para a pessoa:</div>
-    <input type="text" readonly value="${esc(link)}" class="lnk" onclick="this.select()">
-    <div class="chips"><button class="btn sm primary" data-copy="${esc(link)}">Copiar link</button><a class="btn sm" href="https://wa.me/?text=${encodeURIComponent(msg)}" target="_blank" rel="noopener">Enviar pelo WhatsApp</a></div>`;
-}
-async function openUsers(tab){
-  const master=!!ME.isMaster;
-  const m=modal(`<div class="mh">Administração</div>
-    <div class="itabs"><button data-t="users">👥 Usuários</button>${master?'<button data-t="plans">💳 Planos</button>':''}</div>
-    <div class="mb" id="uBody" style="padding-top:14px"><p>Carregando…</p></div><div class="mf"><button class="btn" data-u="close">Fechar</button></div>`);
-  m.el.querySelector('.mod').classList.add('wide');
-  const body=m.el.querySelector('#uBody');let out='',plans=[],cur=tab==='plans'&&master?'plans':'users',editPlan=null;
-  const loadPlans=async()=>{try{plans=(await api('GET','/api/admin/plans')).plans}catch(e){plans=[]}};
-  const drawUsers=async()=>{
-    let users;try{users=(await api('GET','/api/admin/users')).users}catch(e){body.innerHTML=`<p>${esc(e.message)}</p>`;return}
-    if(!plans.length)await loadPlans();
-    const pname=id=>{const p=plans.find(x=>x.id===id);return p?p.name:id};
-    const st=u=>u.status==='active'?'<span class="badge ok">ativo</span>':u.status==='invited'?'<span class="badge warn">convite pendente</span>':'<span class="badge bad">bloqueado</span>';
-    body.innerHTML=`<form id="uAdd" class="egrid" style="grid-template-columns:2fr 2fr 1fr ${master?'1fr ':''}auto;align-items:end">
-        <label class="f">Nome<input type="text" id="uN" placeholder="Nome"></label>
-        <label class="f">E-mail<input type="email" id="uE" placeholder="email@exemplo.com" required></label>
-        <label class="f">Perfil<select id="uR"><option value="member">Membro</option>${master?'<option value="admin">Administrador</option>':''}</select></label>
-        ${master?`<label class="f">Plano<select id="uP">${plans.map(p=>`<option value="${esc(p.id)}" ${p.isDefault?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label>`:''}
-        <button class="btn primary" type="submit">Convidar</button></form>
-      <div id="uOut">${out}</div>
-      <ul class="ulist">${users.map(u=>{const self=u.id===ME.id,locked=u.is_master||(!master&&u.role==='admin');
-        return `<li><div class="li-main" style="min-width:180px"><div class="li-t">${esc(u.name||'—')} <span class="badge${u.is_master?' warn':''}">${roleLabel(u)}</span> ${st(u)}</div>
-          <div class="li-a">${esc(u.email)} · ${u.songs} música${u.songs==1?'':'s'} · ${u.sets} repertório${u.sets==1?'':'s'}${u.last_login_at?' · último acesso '+new Date(u.last_login_at*1000).toLocaleDateString('pt-BR'):''}</div></div>
-        <div class="chips">
-          ${master?`<select class="sm-sel" data-plan="${u.id}" title="Plano">${plans.map(p=>`<option value="${esc(p.id)}" ${p.id===u.plan_id?'selected':''}>${esc(p.name)}</option>`).join('')}</select>`:`<span class="chip">${esc(pname(u.plan_id))}</span>`}
-          ${master&&!u.is_master?`<select class="sm-sel" data-role="${u.id}" title="Perfil"><option value="member" ${u.role==='member'?'selected':''}>Membro</option><option value="admin" ${u.role==='admin'?'selected':''}>Administrador</option></select>`:''}
-          ${self||locked?(self?'<span class="hint">você</span>':''):`
-          <button class="btn sm" data-ua="link" data-id="${u.id}" data-email="${esc(u.email)}">${u.status==='invited'?'Novo convite':'Link de nova senha'}</button>
-          ${u.status==='disabled'?`<button class="btn sm" data-ua="enable" data-id="${u.id}">Desbloquear</button>`:`<button class="btn sm" data-ua="disable" data-id="${u.id}">Bloquear</button>`}
-          <button class="btn sm danger" data-ua="del" data-id="${u.id}" data-email="${esc(u.email)}">Excluir</button>`}
-        </div></li>`}).join('')}</ul>`;
-    body.querySelector('#uAdd').onsubmit=async ev=>{ev.preventDefault();
-      try{const email=body.querySelector('#uE').value;const P=body.querySelector('#uP');
-        const r=await api('POST','/api/admin/users',{name:body.querySelector('#uN').value,email,role:body.querySelector('#uR').value,plan_id:P?P.value:undefined});
-        out=linkBox(r.link,email,'invite');await drawUsers();
-      }catch(e){toast(e.message)}};
-    body.querySelectorAll('[data-plan]').forEach(sel=>sel.onchange=async()=>{try{await api('PATCH','/api/admin/users/'+sel.dataset.plan,{plan_id:sel.value});toast('Plano alterado.')}catch(e){toast(e.message);drawUsers()}});
-    body.querySelectorAll('[data-role]').forEach(sel=>sel.onchange=async()=>{try{await api('PATCH','/api/admin/users/'+sel.dataset.role,{role:sel.value});toast('Perfil alterado.');drawUsers()}catch(e){toast(e.message);drawUsers()}});
-  };
-  const planForm=p=>{p=p||{id:'',name:'',description:'',priceCents:0,interval:'month',maxSongs:null,maxSetlists:null,active:true,isDefault:false,sort:0};
-    return `<form id="pForm" style="display:flex;flex-direction:column;gap:10px;border:1px solid var(--line);border-radius:12px;padding:12px">
-      <b>${p.id?'Editar plano':'Novo plano'}</b>
-      <div class="egrid" style="grid-template-columns:2fr 1fr 1fr">
-        <label class="f">Nome<input type="text" id="pN" value="${esc(p.name)}" placeholder="ex: Pro" required></label>
-        <label class="f">Preço (R$)<input type="text" id="pV" value="${p.priceCents?(p.priceCents/100).toFixed(2).replace('.',','):''}" inputmode="decimal" placeholder="0,00"></label>
-        <label class="f">Cobrança<select id="pI"><option value="none" ${p.interval==='none'?'selected':''}>Sem cobrança</option><option value="month" ${p.interval==='month'?'selected':''}>Mensal</option><option value="year" ${p.interval==='year'?'selected':''}>Anual</option></select></label>
-      </div>
-      <label class="f">Descrição<input type="text" id="pD" value="${esc(p.description||'')}" placeholder="O que o plano oferece"></label>
-      <div class="egrid" style="grid-template-columns:1fr 1fr">
-        <label class="f">Limite de músicas próprias<input type="number" id="pS" min="0" value="${p.maxSongs??''}" placeholder="vazio = ilimitado"></label>
-        <label class="f">Limite de repertórios<input type="number" id="pR" min="0" value="${p.maxSetlists??''}" placeholder="vazio = ilimitado"></label>
-      </div>
-      <label class="chk"><input type="checkbox" id="pA" ${p.active?'checked':''}> <span>Ativo (pode ser atribuído)</span></label>
-      <label class="chk"><input type="checkbox" id="pP" ${p.isDefault?'checked':''}> <span>Plano padrão para novos usuários</span></label>
-      <div class="chips"><button class="btn primary" type="submit">Salvar plano</button><button class="btn" type="button" data-pc="1">Cancelar</button>${p.id&&!p.isDefault?`<button class="btn danger" type="button" data-pdel="${esc(p.id)}">Excluir plano</button>`:''}</div>
-      <input type="hidden" id="pId" value="${esc(p.id)}"></form>`};
-  const drawPlans=async()=>{
-    await loadPlans();
-    body.innerHTML=`<div class="info">Os planos organizam as contas e limitam o uso (músicas próprias e repertórios). <b>A cobrança automática ainda não está ligada</b> — por enquanto, você atribui o plano a cada usuário manualmente. Administradores e o master não têm limites. As cifras padrão do catálogo não contam no limite.</div>
-      ${editPlan!==null?planForm(editPlan):'<div><button class="btn primary" data-pn="1">+ Novo plano</button></div>'}
-      <ul class="ulist">${plans.map(p=>`<li><div class="li-main"><div class="li-t">${esc(p.name)} ${p.isDefault?'<span class="badge ok">padrão</span>':''} ${p.active?'':'<span class="badge bad">inativo</span>'}</div>
-        <div class="li-a">${money(p.priceCents,p.interval)} · ${p.maxSongs!=null?p.maxSongs+' músicas':'músicas ilimitadas'} · ${p.maxSetlists!=null?p.maxSetlists+' repertórios':'repertórios ilimitados'} · ${p.users} usuário${p.users==1?'':'s'}</div></div>
-        <button class="btn sm" data-pe="${esc(p.id)}">Editar</button></li>`).join('')}</ul>`;
-    const f=body.querySelector('#pForm');
-    if(f)f.onsubmit=async ev=>{ev.preventDefault();const q=id=>body.querySelector('#'+id);
-      const name=q('pN').value.trim();let id=q('pId').value||slug(name).slice(0,40);if(id.length<2)id='plano-'+Date.now().toString(36);
-      const price=Math.round(parseFloat((q('pV').value||'0').replace(/\./g,'').replace(',','.'))*100)||0;
-      try{await api('PUT','/api/admin/plans/'+id,{name,description:q('pD').value,price_cents:price,billing_interval:q('pI').value,
-          max_songs:q('pS').value===''?null:+q('pS').value,max_setlists:q('pR').value===''?null:+q('pR').value,active:q('pA').checked,is_default:q('pP').checked});
-        editPlan=null;toast('Plano salvo.');drawPlans()}catch(e){toast(e.message)}};
-  };
-  const draw=()=>{m.el.querySelectorAll('.itabs button').forEach(b=>b.classList.toggle('act',b.dataset.t===cur));return cur==='plans'?drawPlans():drawUsers()};
+    <div class="mf"><button class="btn" data-a="pw">Trocar senha</button><button class="btn danger" data-a="out">Sair</button></div>`);
   m.el.addEventListener('click',async e=>{
-    if(e.target.closest('[data-u=close]'))return m.close();
-    const t=e.target.closest('.itabs [data-t]');if(t){cur=t.dataset.t;editPlan=null;out='';draw();return}
-    if(e.target.closest('[data-pn]')){editPlan=Object.assign({},{id:'',name:'',description:'',priceCents:0,interval:'month',maxSongs:null,maxSetlists:null,active:true,isDefault:false});drawPlans();return}
-    if(e.target.closest('[data-pc]')){editPlan=null;drawPlans();return}
-    const pe=e.target.closest('[data-pe]');if(pe){editPlan=plans.find(p=>p.id===pe.dataset.pe)||null;drawPlans();return}
-    const pd=e.target.closest('[data-pdel]');
-    if(pd){m.el.style.display='none';const ok=await confirmBox('Excluir este plano?');m.el.style.display='';if(!ok)return;
-      try{await api('DELETE','/api/admin/plans/'+pd.dataset.pdel);editPlan=null;toast('Plano excluído.');drawPlans()}catch(err){toast(err.message)}return}
-    const c=e.target.closest('[data-copy]');
-    if(c){try{await navigator.clipboard.writeText(c.dataset.copy);toast('Link copiado.')}catch(_){const i=m.el.querySelector('.lnk');i&&i.select()}return}
-    const b=e.target.closest('[data-ua]');if(!b)return;const id=b.dataset.id,a=b.dataset.ua;
-    try{
-      if(a==='link'){const r=await api('POST',`/api/admin/users/${id}/link`);out=linkBox(r.link,b.dataset.email,r.purpose)}
-      if(a==='disable')await api('POST',`/api/admin/users/${id}/disable`);
-      if(a==='enable')await api('POST',`/api/admin/users/${id}/enable`);
-      if(a==='del'){m.el.style.display='none';const ok=await confirmBox(`Excluir ${b.dataset.email}? As músicas próprias e os repertórios dessa pessoa serão apagados (cifras padrão que ela criou passam para você).`);m.el.style.display='';if(!ok)return;await api('DELETE',`/api/admin/users/${id}`);out=''}
-      await drawUsers();
-    }catch(err){toast(err.message)}
+    const cp=e.target.closest('[data-pix]');
+    if(cp){try{await navigator.clipboard.writeText(cp.dataset.pix);toast('PIX copiado. Cole no app do seu banco.')}catch(_){const i=cp.parentElement.parentElement.querySelector('input');i&&i.select()}return}
+    const b=e.target.closest('[data-a]');if(!b)return;m.close();
+    if(b.dataset.a==='pw')showChangePw(false);if(b.dataset.a==='out')logout()});
+  drawBilling(m.el.querySelector('#billBox'));
+}
+async function drawBilling(box){
+  let d;try{d=await api('GET','/api/my/billing')}catch(e){box.innerHTML=`<p class="hint">${esc(e.message)}</p>`;return}
+  const st={pendente:'<span class="badge warn">a pagar</span>',vencido:'<span class="badge bad">vencida</span>',pago:'<span class="badge ok">paga</span>'};
+  const fmt=dt=>dt?dt.split('-').reverse().join('/'):'';
+  const sub=d.subscription;
+  box.innerHTML=`<p>${d.plan?`<b>${esc(d.plan.name)}</b> · ${money(sub?sub.priceCents:d.plan.priceCents,sub?sub.interval:d.plan.interval)}`:'—'}${sub?` · ${sub.status==='ativa'?'assinatura ativa':'assinatura '+esc(sub.status)}${sub.nextDue&&sub.interval!=='none'?' · próximo vencimento '+fmt(sub.nextDue):''}`:''}</p>
+    ${d.plan&&(d.plan.maxSongs!=null||d.plan.maxSetlists!=null)&&!isStaff()?`<p class="hint">Limites: ${d.plan.maxSongs!=null?d.plan.maxSongs+' músicas próprias':'músicas ilimitadas'} · ${d.plan.maxSetlists!=null?d.plan.maxSetlists+' repertórios':'repertórios ilimitados'}</p>`:''}
+    ${d.charges.length?`<ul class="ulist">${d.charges.map(c=>`<li><div class="li-main"><div class="li-t">${esc(c.description)} ${st[c.status_view]||''}</div>
+      <div class="li-a">${money(c.amount_cents)} · vence ${fmt(c.due_date)}${c.paid_at?' · paga em '+fmt(c.paid_at):''}</div></div>
+      ${c.pix?`<div style="flex-basis:100%;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><div class="qr" data-qr="${esc(c.pix)}"></div><div style="flex:1;min-width:200px;display:flex;flex-direction:column;gap:6px">
+        <input type="text" readonly value="${esc(c.pix)}" onclick="this.select()" style="font-family:'JetBrains Mono',monospace;font-size:11px">
+        <div class="chips"><button class="btn sm primary" data-pix="${esc(c.pix)}">Copiar PIX copia e cola</button></div></div></div>`:''}</li>`).join('')}</ul>`:'<p class="hint">Nenhuma cobrança.</p>'}
+    ${d.pix&&d.pix.instructions?`<p class="hint">${esc(d.pix.instructions)}</p>`:''}
+    ${d.charges.some(c=>c.pix)?'<p class="hint">Depois de pagar, a baixa é feita pelo administrador.</p>':''}`;
+  renderQRs(box);
+}
+let qrLib=null;
+function loadQR(){
+  if(window.qrcode)return Promise.resolve(window.qrcode);
+  if(!qrLib)qrLib=new Promise((res,rej)=>{const sc=document.createElement('script');sc.src='https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js';sc.onload=()=>res(window.qrcode);sc.onerror=()=>{qrLib=null;rej()};document.head.appendChild(sc)});
+  return qrLib;
+}
+async function renderQRs(root){
+  const els=root.querySelectorAll('[data-qr]');if(!els.length)return;
+  try{const q=await loadQR();els.forEach(el=>{const qr=q(0,'M');qr.addData(el.dataset.qr);qr.make();el.innerHTML=qr.createSvgTag({cellSize:3,margin:2});el.style.background='#fff';el.style.borderRadius='8px';el.style.lineHeight='0'})}
+  catch(e){els.forEach(el=>el.remove())}
+}
+/* ---- Repertório em grupo ---- */
+const PERMS=[['list','Editar a lista','adicionar, remover, reordenar, renomear e mudar a data'],['transpose','Mudar o tom','das músicas deste repertório'],['songs','Editar as cifras','criar e alterar versões, frases e convenções'],['manage','Gerenciar membros','convidar, remover e mudar permissões']];
+async function openMembers(setId){
+  const m=modal(`<div class="mh">👥 Repertório em grupo</div><div class="mb" id="gBody"><p>Carregando…</p></div><div class="mf"><button class="btn" data-g="close">Fechar</button></div>`);
+  m.el.querySelector('.mod').classList.add('wide');
+  const body=m.el.querySelector('#gBody');
+  const draw=async()=>{
+    let d;try{d=await api('GET',`/api/sets/${setId}/members`)}catch(e){body.innerHTML=`<p>${esc(e.message)}</p>`;return}
+    const can=d.myPerms.manage,isOwner=!!d.myPerms.owner;
+    body.innerHTML=`<div class="info">Cada membro vê este repertório na própria lista e toca junto. Escolha o que cada pessoa pode fazer — tudo fica registrado no 📜 Histórico.</div>
+      ${can?`<div style="position:relative"><label class="f">Adicionar pessoa (nome ou e-mail de quem já tem conta)<input type="search" id="gQ" placeholder="Buscar usuário…" autocomplete="off"></label><ul class="pick" id="gRes"></ul></div>`:''}
+      <ul class="ulist">
+        <li><div class="li-main"><div class="li-t">${esc(d.owner?d.owner.name:'')} <span class="badge warn">dono</span></div><div class="li-a">${esc(d.owner?d.owner.email:'')} · todas as permissões</div></div></li>
+        ${d.members.map(u=>`<li data-uid="${u.id}"><div class="li-main" style="min-width:180px"><div class="li-t">${esc(u.name||u.email)}${u.id===ME.id?' <span class="hint">você</span>':''}</div><div class="li-a">${esc(u.email)}</div></div>
+          <div class="chips">${PERMS.map(([k,l,h])=>`<label class="chk" title="${esc(h)}" style="padding:5px 8px"><input type="checkbox" data-perm="${k}" ${u.perms[k]?'checked':''} ${!can||(k==='manage'&&!isOwner)||(u.perms.manage&&!isOwner)?'disabled':''}> <span>${l}</span></label>`).join('')}
+          ${can&&(isOwner||!u.perms.manage)||u.id===ME.id?`<button class="btn sm danger" data-rm="${u.id}">${u.id===ME.id?'Sair':'Remover'}</button>`:''}</div></li>`).join('')||'<li><span class="hint">Ainda sem membros — busque uma pessoa acima para começar o grupo.</span></li>'}
+      </ul>`;
+    const q=body.querySelector('#gQ'),res=body.querySelector('#gRes');
+    if(q){let t=null;q.addEventListener('input',()=>{clearTimeout(t);t=setTimeout(async()=>{
+      if(q.value.trim().length<2){res.innerHTML='';return}
+      try{const r=await api('GET','/api/users/search?q='+encodeURIComponent(q.value.trim()));const have=new Set(d.members.map(x=>x.id));
+        res.innerHTML=r.users.filter(u=>!have.has(u.id)&&(!d.owner||u.id!==d.owner.id)).map(u=>`<li><div class="li-main"><div class="li-t">${esc(u.name||u.email)}</div><div class="li-a">${esc(u.email)}</div></div><button class="btn sm primary" data-add="${u.id}">+ Adicionar</button></li>`).join('')||'<li><span class="hint">Ninguém encontrado. A pessoa precisa ter conta ativa no NaNota.</span></li>'}catch(e){}
+    },250)});setTimeout(()=>q.focus(),30)}
+    body.querySelectorAll('[data-perm]').forEach(cb=>cb.onchange=async()=>{
+      const li=cb.closest('[data-uid]');const p={};li.querySelectorAll('[data-perm]').forEach(x=>p[x.dataset.perm]=x.checked);
+      try{await api('PUT',`/api/sets/${setId}/members/${li.dataset.uid}`,p);toast('Permissões salvas.')}catch(e){toast(e.message);draw()}});
+  };
+  m.el.addEventListener('click',async e=>{
+    if(e.target.closest('[data-g=close]')){m.close();bgRefresh();return}
+    const a=e.target.closest('[data-add]');
+    if(a){try{await api('PUT',`/api/sets/${setId}/members/${a.dataset.add}`,{list:false,transpose:true,songs:false,manage:false});toast('Adicionado ao grupo. Ajuste as permissões ao lado do nome.');draw()}catch(err){toast(err.message)}return}
+    const r=e.target.closest('[data-rm]');
+    if(r){const self=r.dataset.rm===ME.id;try{await api('DELETE',`/api/sets/${setId}/members/${r.dataset.rm}`);if(self){m.close();S.view='sets';await bgRefresh();render();return}draw()}catch(err){toast(err.message)}}
   });
   draw();
+}
+async function openLogs(setId){
+  const m=modal(`<div class="mh">📜 Histórico do repertório</div><div class="mb" id="lBody"><p>Carregando…</p></div><div class="mf"><button class="btn" data-l="close">Fechar</button></div>`);
+  m.el.querySelector('.mod').classList.add('wide');
+  m.el.addEventListener('click',e=>{if(e.target.closest('[data-l=close]'))m.close()});
+  const body=m.el.querySelector('#lBody');
+  try{
+    const d=await api('GET',`/api/sets/${setId}/logs`);
+    const fmt=t=>new Date(t*1000).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+    const ico={criou:'✨',renomeou:'✏️',data:'📅',adicionou:'➕',removeu:'➖',reordenou:'↕️',tom:'🎚️',versao:'📝',obs:'💬',membro:'👥',saiu:'🚪'};
+    body.innerHTML=d.logs.length?`<ul class="ulist">${d.logs.map(l=>`<li><span style="font-size:18px">${ico[l.action]||'•'}</span><div class="li-main"><div class="li-t" style="white-space:normal">${esc(l.detail)}</div><div class="li-a">${esc(l.user_name||'—')} · ${fmt(l.created_at)}</div></div></li>`).join('')}</ul>`:'<p class="hint">Nenhuma alteração registrada ainda.</p>';
+  }catch(e){body.innerHTML=`<p>${esc(e.message)}</p>`}
+}
+async function leaveGroup(setId){
+  const set=S.sets[setId];
+  if(!(await confirmBox(`Sair do repertório “${set?set.name:''}”? Ele some da sua lista.`,'Sair')))return;
+  try{await api('POST',`/api/sets/${setId}/leave`);toast('Você saiu do grupo.');S.view='sets';await bgRefresh();render()}catch(e){toast(e.message)}
 }
 
 /* ============ Utilidades de UI ============ */
@@ -693,7 +702,7 @@ function confirmBox(msg,ok='Excluir'){
     const obs=new MutationObserver(()=>{if(!m.el.isConnected){obs.disconnect();res(false)}});obs.observe(document.body,{childList:true});
   });
 }
-function songsSorted(){return Object.values(S.songs).sort((a,b)=>(a.title||'').localeCompare(b.title||'','pt',{sensitivity:'base'}))}
+function songsSorted(){return Object.values(S.songs).filter(x=>!x.shared).sort((a,b)=>(a.title||'').localeCompare(b.title||'','pt',{sensitivity:'base'}))}
 function norm(s){return (s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase()}
 function matches(song,q){
   if(!q) return true;
@@ -774,7 +783,7 @@ function renderSets(){
   app.innerHTML=topbar('sets')+`<main class="wrap">
     <div class="toolbar"><div style="flex:1;font-weight:700;font-size:20px">Repertórios</div><button class="btn primary" data-act="new-set">+ Novo repertório</button></div>
     ${sets.length?`<ul class="list">${sets.map(s=>`<li data-act="open-set" data-id="${s.id}">
-      <div class="li-main"><div class="li-t">${esc(s.name||'Sem nome')}</div><div class="li-a">${s.date?esc(fmtDate(s.date))+' · ':''}${(s.items||[]).length} música${(s.items||[]).length===1?'':'s'}</div></div>
+      <div class="li-main"><div class="li-t">${esc(s.name||'Sem nome')}${s.group&&s.group.isGroup?` <span class="tag padrao">👥 grupo</span>`:''}</div><div class="li-a">${s.date?esc(fmtDate(s.date))+' · ':''}${(s.items||[]).length} música${(s.items||[]).length===1?'':'s'}${s.group&&!s.group.isOwner?' · de '+esc(s.group.ownerName||'outra pessoa'):''}</div></div>
       <button class="btn sm primary" data-act="play-set" data-id="${s.id}">▶ Tocar</button></li>`).join('')}</ul>`
     :`<div class="empty"><h2>Nenhum repertório ainda</h2><p>Monte a lista de um culto, show ou ensaio e toque em sequência, passando de uma música para outra com um toque.</p><div class="row"><button class="btn primary" data-act="new-set">+ Novo repertório</button></div></div>`}
   </main>`;
@@ -784,27 +793,32 @@ function fmtDate(d){const m=d.match(/^(\d{4})-(\d{2})-(\d{2})$/);return m?`${m[3
 function renderSet(){
   const set=S.sets[S.setId];if(!set){S.view='sets';return render()}
   const items=set.items||[];
+  const P=k=>setPerm(set,k),G=set.group,owner=!G||G.isOwner;
+  const ro=P('list')?'':'readonly';
   app.innerHTML=topbar('sets')+`<main class="wrap">
     <button class="btn ghost sm" data-act="tab-sets" style="margin-bottom:10px">← Repertórios</button>
-    <div class="sethead"><input type="text" class="name" id="setName" value="${esc(set.name||'')}" placeholder="Nome do repertório"><input type="date" id="setDate" value="${esc(set.date||'')}"></div>
+    ${G&&!G.isOwner?`<div class="info" style="margin-bottom:12px">👥 Repertório de <b>${esc(G.ownerName||'outra pessoa')}</b>. Você pode: <b>${['list','transpose','songs','manage'].filter(P).map(k=>({list:'editar a lista',transpose:'mudar o tom',songs:'editar as cifras',manage:'gerenciar membros'})[k]).join(', ')||'só visualizar e tocar'}</b>.</div>`:''}
+    <div class="sethead"><input type="text" class="name" id="setName" value="${esc(set.name||'')}" placeholder="Nome do repertório" ${ro}><input type="date" id="setDate" value="${esc(set.date||'')}" ${ro}></div>
     <div class="setactions">
       <button class="btn primary" data-act="play-set" data-id="${set.id}" ${items.length?'':'disabled'}>▶ Tocar repertório</button>
-      <button class="btn" data-act="set-add">+ Adicionar músicas</button>
+      ${P('list')?'<button class="btn" data-act="set-add">+ Adicionar músicas</button>':''}
+      ${API_MODE?`<button class="btn" data-act="set-members">👥 ${G&&G.isGroup?'Grupo ('+(G.members+1)+')':'Compartilhar em grupo'}</button><button class="btn" data-act="set-logs">📜 Histórico</button>`:''}
       <div style="flex:1"></div>
-      <button class="btn danger" data-act="set-del">Excluir</button>
+      ${owner?'<button class="btn danger" data-act="set-del">Excluir</button>':'<button class="btn danger" data-act="set-leave">Sair do grupo</button>'}
     </div>
     ${items.length?`<ul class="list" id="items">${items.map((it,i)=>{const s=S.songs[it.songId];
-      return `<li class="item" draggable="true" data-i="${i}">
-        <span class="grip" title="Arraste para reordenar">⠿</span><span class="n">${i+1}</span>
+      return `<li class="item" ${P('list')?'draggable="true"':''} data-i="${i}">
+        ${P('list')?'<span class="grip" title="Arraste para reordenar">⠿</span>':''}<span class="n">${i+1}</span>
         <div class="li-main play" data-act="play-set" data-id="${set.id}" data-i="${i}"><div class="li-t">${esc(s?s.title:'(música excluída)')}${it.content!=null||it.notes!=null?' <span class="tag arr">versão própria</span>':''}</div><div class="li-a">${esc(s?s.artist||'—':'')}</div></div>
-        ${s?`<button class="btn sm" data-act="it-arr" data-i="${i}" title="Personalizar a cifra só neste repertório">✎ Versão</button>`:''}
-        ${s&&s.key?`<div class="grp"><button class="btn" data-act="it-tr" data-i="${i}" data-d="-1">−</button><span class="lbl">${esc(keyAt(s.key,it.transpose||0))}</span><button class="btn" data-act="it-tr" data-i="${i}" data-d="1">+</button></div>`:''}
-        <div class="ctl"><button class="btn icon sm ghost" data-act="it-mv" data-i="${i}" data-d="-1" ${i?'':'disabled'} title="Subir">↑</button><button class="btn icon sm ghost" data-act="it-mv" data-i="${i}" data-d="1" ${i<items.length-1?'':'disabled'} title="Descer">↓</button><button class="btn icon sm ghost danger" data-act="it-rm" data-i="${i}" title="Remover">✕</button></div>
+        ${s&&P('songs')?`<button class="btn sm" data-act="it-arr" data-i="${i}" title="Personalizar a cifra só neste repertório">✎ Versão</button>`:''}
+        ${s&&s.key?(P('transpose')?`<div class="grp"><button class="btn" data-act="it-tr" data-i="${i}" data-d="-1">−</button><span class="lbl">${esc(keyAt(s.key,it.transpose||0))}</span><button class="btn" data-act="it-tr" data-i="${i}" data-d="1">+</button></div>`:`<span class="key">${esc(keyAt(s.key,it.transpose||0))}</span>`):''}
+        ${P('list')?`<div class="ctl"><button class="btn icon sm ghost" data-act="it-mv" data-i="${i}" data-d="-1" ${i?'':'disabled'} title="Subir">↑</button><button class="btn icon sm ghost" data-act="it-mv" data-i="${i}" data-d="1" ${i<items.length-1?'':'disabled'} title="Descer">↓</button><button class="btn icon sm ghost danger" data-act="it-rm" data-i="${i}" title="Remover">✕</button></div>`:''}
       </li>`}).join('')}</ul>`
-    :`<div class="empty"><h2>Repertório vazio</h2><p>Adicione músicas da sua biblioteca.</p><div class="row"><button class="btn primary" data-act="set-add">+ Adicionar músicas</button></div></div>`}
+    :`<div class="empty"><h2>Repertório vazio</h2><p>${P('list')?'Adicione músicas da sua biblioteca.':'Ainda não há músicas neste repertório.'}</p>${P('list')?'<div class="row"><button class="btn primary" data-act="set-add">+ Adicionar músicas</button></div>':''}</div>`}
   </main>`;
   updateStatus();
   const nm=document.getElementById('setName'),dt=document.getElementById('setDate');
+  if(!P('list'))return;
   nm.addEventListener('change',()=>{const s=clone(S.sets[S.setId]);s.name=nm.value.trim()||'Sem nome';persist(s)});
   dt.addEventListener('change',()=>{const s=clone(S.sets[S.setId]);s.date=dt.value;persist(s)});
   // arrastar e soltar
@@ -878,7 +892,8 @@ function blankSong(){return {id:uid('s'),type:'song',title:'',artist:'',key:'',b
 let ME=null;
 const API_MODE=typeof initApi==='function';
 function isStaff(){return !ME||ME.role==='admin'||!!ME.isMaster}
-function canEditSong(s){return !!s&&(!s.catalog||isStaff())}
+function canEditSong(s){return !!s&&!s.shared&&(!s.catalog||isStaff())}
+function setPerm(set,k){return !set||!set.group||!set.group.isGroup&&set.group.isOwner!==false||!!(set.group.perms&&set.group.perms[k])}
 function openEditor(song,ret,dirty){S.edit={mode:'song',song:clone(song),isNew:!S.songs[song.id],ret,dirty:!!dirty};S.view='edit';render()}
 function openArrangement(setId,idx,ret){
   const set=S.sets[setId],it=set&&set.items[idx],base=it&&S.songs[it.songId];
@@ -1037,7 +1052,7 @@ function renderViewer(keep){
       <div class="grp hide-sm"><button class="btn ${P.showChords?'on':''}" data-act="v-chords" title="Mostrar/ocultar acordes">Cifra</button><button class="btn ${P.cols?'on':''}" data-act="v-cols" title="Duas colunas">2 col</button></div>
       ${safeUrl(s.link||'')?`<a class="btn icon" href="${esc(safeUrl(s.link))}" target="_blank" rel="noopener" title="Abrir versão de referência">${/youtu/.test(s.link)?'▶ YT':/spotify/.test(s.link)?'♫ Spotify':/deezer/.test(s.link)?'♫ Deezer':'↗'}</a>`:''}
       <button class="btn icon" data-act="v-list" title="Lista (L)">☰</button>
-      ${e.song&&(v.ctx==='set'||canEditSong(e.song))?`<button class="btn icon hide-sm" data-act="v-edit" title="${v.ctx==='set'?'Editar a versão deste repertório (E)':'Editar (E)'}">✎</button>`:''}
+      ${e.song&&(v.ctx==='set'?setPerm(set,'songs'):canEditSong(e.song))?`<button class="btn icon hide-sm" data-act="v-edit" title="${v.ctx==='set'?'Editar a versão deste repertório (E)':'Editar (E)'}">✎</button>`:''}
       <button class="btn icon hide-sm" data-act="v-full" title="Tela cheia (F)">⛶</button>
     </div>
     <div class="vscroll" id="vscroll"><div class="sheet ${P.cols?'cols':''} ${P.showChords?'':'nochords'} ${keep?'':(v.dir==='next'?'anim-next':v.dir==='prev'?'anim-prev':'')}" style="font-size:${P.font}px">
@@ -1071,6 +1086,7 @@ function goto(i,dir){
   const sc=document.getElementById('vscroll');if(sc)sc.scrollTop=0;
 }
 function changeSemis(d,reset){
+  if(S.viewer&&S.viewer.ctx==='set'&&!setPerm(S.sets[S.viewer.setId],'transpose')){toast('Você não tem permissão para mudar o tom neste repertório.');return}
   const v=S.viewer,e=vEntry(v.idx);if(!e||!e.song)return;
   const ns=reset?0:normSemis(e.semis+d);
   if(v.ctx==='set'){const set=clone(S.sets[v.setId]);set.items[v.idx].transpose=ns;persist(set,700)}
@@ -1641,6 +1657,9 @@ app.addEventListener('click',async ev=>{
     case 'open-set':S.setId=el.dataset.id;S.view='set';render();break;
     case 'play-set':{ev.stopPropagation();const set=S.sets[el.dataset.id];if(!set||!set.items.length)return;openViewer('set',set.items.map(x=>x.songId),i||0,set.id);break}
     case 'set-add':openPicker();break;
+    case 'set-members':openMembers(S.setId);break;
+    case 'set-logs':openLogs(S.setId);break;
+    case 'set-leave':leaveGroup(S.setId);break;
     case 'set-del':{const set=S.sets[S.setId];if(await confirmBox(`Excluir o repertório "${set.name}"? As músicas continuam na biblioteca.`)){removeItem(set);S.view='sets';render()}break}
     case 'it-tr':{const set=clone(S.sets[S.setId]);set.items[i].transpose=normSemis((set.items[i].transpose||0)+d);persist(set,700);renderSet();break}
     case 'it-mv':{const set=clone(S.sets[S.setId]);const j=i+d;if(j<0||j>=set.items.length)return;[set.items[i],set.items[j]]=[set.items[j],set.items[i]];persist(set);renderSet();break}
@@ -1688,7 +1707,7 @@ app.addEventListener('click',async ev=>{
     case 'v-list':{const dr=document.getElementById('drawer');dr.classList.toggle('open');if(dr.classList.contains('open')){drawDrawer();setTimeout(()=>{const q=document.getElementById('dq');q&&q.focus()},50)}break}
     case 'v-jump':{const dr=document.getElementById('drawer');dr.classList.remove('open');const cur=S.viewer.idx;if(i!==cur)goto(i,i>cur?'next':'prev');break}
     case 'v-open-other':{const v=S.viewer;const set=clone(S.sets[v.setId]);const song=S.songs[el.dataset.id];set.items.splice(v.idx+1,0,{songId:song.id,transpose:song.transpose||0});persist(set);v.ids=set.items.map(x=>x.songId);document.getElementById('drawer').classList.remove('open');goto(v.idx+1,'next');toast('Adicionada ao repertório após a atual.');break}
-    case 'v-edit':{const v=S.viewer,e=vEntry(v.idx);if(!e||!e.song)break;if(v.ctx==='set')openArrangement(v.setId,v.idx,'viewer');else if(canEditSong(e.song))openEditor(e.song,'viewer');break}
+    case 'v-edit':{const v=S.viewer,e=vEntry(v.idx);if(!e||!e.song)break;if(v.ctx==='set'){if(setPerm(S.sets[v.setId],'songs'))openArrangement(v.setId,v.idx,'viewer');else toast('Você não tem permissão para editar as cifras deste repertório.')}else if(canEditSong(e.song))openEditor(e.song,'viewer');break}
     case 'v-full':try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen()}catch(e){toast('Tela cheia indisponível aqui.')}break;
   }
 });
