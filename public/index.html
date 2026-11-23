@@ -194,7 +194,9 @@ textarea.code{font-family:'JetBrains Mono',monospace;font-size:14px;line-height:
 .np-secs button{padding:7px 14px;border-radius:99px;font-size:13px;font-weight:600}
 .np-secs button.on{background:var(--sec);border-color:var(--sec);color:#06121c}
 .np-body{flex:1;overflow:auto;position:relative;overscroll-behavior:contain;scroll-behavior:auto}
-.npsong{padding:6px 0 26px;border-bottom:2px dashed var(--line)}
+.npsong{padding:6px 0 26px;display:none}
+.npsong.cur{display:block}
+.np-end{text-align:center;color:var(--muted);font-size:13px;padding:22px 12px 40vh}
 .npsong .sheet{overflow-x:hidden}
 .npsong .np-fit{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:99px;padding:1px 7px}
 .np-h{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:12px;padding:10px 22px;background:color-mix(in srgb,var(--bg) 92%,transparent);backdrop-filter:blur(6px)}
@@ -1382,9 +1384,9 @@ function npEntry(set,i){
 function npSig(){const set=S.sets[S.np.setId];return set?JSON.stringify([set.items,set.items.map(it=>{const s=S.songs[it.songId];return s?[s.title,s.key,s.content,s.notes]:0}),S.prefs.font,S.prefs.showChords]):''}
 function npSongHTML(set,i){
   const e=npEntry(set,i);
-  if(!e)return `<section class="npsong" id="nps-${i}"><div class="np-h"><span class="np-n">${i+1}</span><div><div class="np-t">(música indisponível)</div></div></div></section>`;
+  if(!e)return `<section class="npsong${S.np&&S.np.cur===i?' cur':''}" id="nps-${i}"><div class="np-h"><span class="np-n">${i+1}</span><div><div class="np-t">(música indisponível)</div></div></div></section>`;
   const s=e.song,flat=keyFlat(e.key||s.key,e.semis),links=songLinks(s);
-  return `<section class="npsong" id="nps-${i}"><div class="np-h"><span class="np-n">${i+1}</span>
+  return `<section class="npsong${S.np&&S.np.cur===i?' cur':''}" id="nps-${i}"><div class="np-h"><span class="np-n">${i+1}</span>
     <div style="min-width:0"><div class="np-t">${esc(s.title)}</div><div class="np-a">${[s.artist?esc(s.artist):'',e.key?`Tom <b style="color:var(--chord)">${esc(keyAt(e.key,e.semis))}</b>`:'',s.bpm?esc(s.bpm)+' BPM':'',e.arr?'<span class="tag arr">versão do repertório</span>':''].filter(Boolean).join(' · ')}</div></div>
     <span class="sp"></span><span class="np-fit" title="Letra reduzida para a cifra caber na largura da tela"></span>${Object.entries(links).map(([k,u])=>`<a class="btn sm" href="${esc(u)}" target="_blank" rel="noopener">${{youtube:'▶ YT',spotify:'♫ Spotify',deezer:'♫ Deezer',outro:'↗ Ouvir'}[k]}</a>`).join('')}</div>
     <div class="sheet ${S.prefs.showChords?'':'nochords'}" style="font-size:${S.prefs.font}px;padding-top:4px">${e.notes?`<div class="note">${esc(e.notes)}</div>`:''}${renderSheet(e.content,e.semis,flat,S.prefs.showChords)}</div></section>`;
@@ -1405,7 +1407,7 @@ function renderNoPlay(){
     </div>
     <div class="np-strip" id="npSongs">${items.map((it,i)=>{const s=S.songs[it.songId];return `<button data-act="np-song" data-i="${i}" title="${i<9?'Tecla '+(i+1):''}"><span class="n">${i+1}</span><span class="t">${esc(s?s.title:'—')}</span>${s&&s.key?`<span class="k">${esc(keyAt(itemKey(it),it.transpose||0))}</span>`:''}</button>`}).join('')}</div>
     <div class="np-strip np-secs" id="npSecs"></div>
-    <div class="np-body" id="vscroll">${items.map((_,i)=>npSongHTML(set,i)).join('')}<div style="height:65vh"></div></div>
+    <div class="np-body" id="vscroll">${items.map((_,i)=>npSongHTML(set,i)).join('')}<div class="np-end" id="npEnd"></div></div>
     <div class="np-foot"><button data-act="np-prev" id="npPrev"><span class="arr">‹</span><span style="min-width:0"><div class="lab">Anterior</div><div class="nm" id="npPrevN"></div></span></button>
       <button data-act="np-next" id="npNext"><span style="min-width:0"><div class="lab">Próxima</div><div class="nm" id="npNextN"></div></span><span class="arr">›</span></button></div>
   </div>`;
@@ -1413,10 +1415,7 @@ function renderNoPlay(){
   np.sig=npSig();npAnchors();npSync(true);
   const body=document.getElementById('vscroll');let raf=null;
   body.addEventListener('scroll',()=>{if(raf)return;raf=requestAnimationFrame(()=>{raf=null;npSync(false)})},{passive:true});
-  let x0=null,y0=null,t0=0;
-  body.addEventListener('touchstart',e=>{const t=e.touches[0];x0=t.clientX;y0=t.clientY;t0=Date.now()},{passive:true});
-  body.addEventListener('touchend',e=>{if(x0===null)return;const t=e.changedTouches[0];const dx=t.clientX-x0,dy=t.clientY-y0;x0=null;
-    if(Date.now()-t0<600&&Math.abs(dx)>70&&Math.abs(dy)<60)npGoSong(np.cur+(dx<0?1:-1),true)},{passive:true});
+  // uma música por vez: a troca é só tocando na música lá em cima (sem deslizar para a próxima)
   if(scrollOn)startScroll();
 }
 /* cada cifra cabe na largura da tela: diminui a letra só o necessário (A−/A+ é o tamanho máximo) */
@@ -1446,10 +1445,9 @@ function npAnchors(){
 }
 function npSync(force){
   const np=S.np,body=document.getElementById('vscroll');if(!body)return;
-  const hd=document.querySelector('.np-h');const y=body.scrollTop+(hd?hd.offsetHeight:56)+14;let cur=0;
-  np.anchors.forEach((a,i)=>{if(a[0]&&a[0].el.offsetTop<=y)cur=i});
+  const curEl=document.getElementById('nps-'+np.cur);const hd=curEl&&curEl.querySelector('.np-h');const y=body.scrollTop+(hd?hd.offsetHeight:56)+14;const cur=np.cur;
   const an=np.anchors[cur]||[];let sec=0;an.forEach((a,k)=>{if(a.el.offsetTop<=y)sec=k});
-  const songChanged=cur!==np.cur||force;
+  const songChanged=force||np.lastSync!==cur;np.lastSync=cur;
   np.cur=cur;np.sec=sec;
   if(songChanged){
     document.querySelectorAll('#npSongs button').forEach((b,i)=>b.classList.toggle('on',i===cur));
@@ -1460,6 +1458,7 @@ function npSync(force){
     const nm=i=>{const it=set.items[i];const s=it&&S.songs[it.songId];return s?`${i+1}. ${s.title}${itemKey(it)?' · '+keyAt(itemKey(it),it.transpose||0):''}`:'—'};
     document.getElementById('npPrevN').textContent=cur>0?nm(cur-1):'—';document.getElementById('npPrev').disabled=cur<=0;
     document.getElementById('npNextN').textContent=cur<set.items.length-1?nm(cur+1):'Fim do repertório';document.getElementById('npNext').disabled=cur>=set.items.length-1;
+    const end=document.getElementById('npEnd');if(end)end.innerHTML=cur<set.items.length-1?`Fim de “${esc((e&&e.song.title)||'')}”. Para a próxima, toque nela lá em cima${'' }: <b>${esc(nm(cur+1))}</b>`:'Fim do repertório 🙌';
   }
   document.querySelectorAll('#npSecs button').forEach((b,k)=>b.classList.toggle('on',k===sec));
   const so=document.querySelector('#npSecs button.on');if(so&&songChanged)so.scrollIntoView({block:'nearest',inline:'nearest'});
@@ -1473,15 +1472,17 @@ function npScrollTo(el,flash){
   if(flash&&fl){fl.classList.remove('flash');void fl.offsetWidth;fl.classList.add('flash')}
   npSync(true);
 }
-function npGoSong(i,flash){const np=S.np;if(!np||i<0||i>=np.anchors.length)return;const a=np.anchors[i][0];if(a)npScrollTo(a.el,flash)}
+function npGoSong(i,flash){const np=S.np;if(!np||i<0||i>=np.anchors.length)return;
+  if(i!==np.cur){if(scrollOn){stopScroll();const sb=document.querySelector('.np [data-act=v-scroll]');if(sb){sb.classList.remove('on');sb.textContent='▶'}}document.querySelectorAll('.npsong').forEach(x=>x.classList.toggle('cur',x.id==='nps-'+i));np.cur=i;npFit();npAnchors()}
+  const body=document.getElementById('vscroll');if(body)body.scrollTop=0;
+  const a=np.anchors[i][0];if(a)npScrollTo(a.el,flash)}
 function npGoSec(k,flash){const np=S.np,an=np.anchors[np.cur]||[];if(!an[k])return;npScrollTo(an[k].el,flash&&k>0)}
 function npStep(dir){
   const np=S.np,an=np.anchors[np.cur]||[];
-  if(dir>0){if(np.sec+1<an.length)npGoSec(np.sec+1,true);else npGoSong(np.cur+1,true)}
+  if(dir>0){if(np.sec+1<an.length)npGoSec(np.sec+1,true);else{const b=document.getElementById('vscroll');if(b)b.scrollTop=b.scrollHeight}}
   else{const body=document.getElementById('vscroll');const a=an[np.sec];
     if(a&&body.scrollTop-(a.el.offsetTop-70)>40)npGoSec(np.sec,true);
-    else if(np.sec>0)npGoSec(np.sec-1,true);
-    else if(np.cur>0){const p=np.anchors[np.cur-1];npScrollTo(p[p.length-1].el,true)}}
+    else if(np.sec>0)npGoSec(np.sec-1,true);}
 }
 function npKeepScroll(){const b=document.getElementById('vscroll');const y=b?b.scrollTop:0;return()=>{const b2=document.getElementById('vscroll');if(b2){b2.scrollTop=y;npSync(true)}}}
 function refreshNoPlay(){if(!S.sets[S.np.setId]){S.view='sets';return render()}if(npSig()===S.np.sig)return;const y=npKeepScroll();renderNoPlay();y()}
