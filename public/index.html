@@ -749,9 +749,41 @@ function wavB64(seg,SR){
   const u=new Uint8Array(buf);let s='';for(let i=0;i<u.length;i+=0x8000)s+=String.fromCharCode.apply(null,u.subarray(i,i+0x8000));
   return btoa(s);
 }
+/* isola a voz: no estéreo, o que soa igual nos dois lados (centro) é mantido; o resto é atenuado.
+   Também tira graves (bumbo/baixo) e chiado. Funciona em mono só com o filtro de banda. */
+function fftInit(N){const lv=Math.log2(N),rev=new Uint32Array(N),cs=new Float32Array(N/2),sn=new Float32Array(N/2);
+  for(let i=0;i<N;i++){let r=0;for(let b=0;b<lv;b++)r|=((i>>b)&1)<<(lv-1-b);rev[i]=r}
+  for(let i=0;i<N/2;i++){cs[i]=Math.cos(2*Math.PI*i/N);sn[i]=-Math.sin(2*Math.PI*i/N)}return {N,rev,cs,sn}}
+function fft(F,re,im,inv){const {N,rev,cs,sn}=F;
+  for(let i=0;i<N;i++){const j=rev[i];if(j>i){let t=re[i];re[i]=re[j];re[j]=t;t=im[i];im[i]=im[j];im[j]=t}}
+  for(let size=2;size<=N;size<<=1){const h=size>>1,st=N/size;
+    for(let i=0;i<N;i+=size)for(let j=0,k=0;j<h;j++,k+=st){const wr=cs[k],wi=inv?-sn[k]:sn[k];const a=i+j,b=a+h;
+      const tr=re[b]*wr-im[b]*wi,ti=re[b]*wi+im[b]*wr;re[b]=re[a]-tr;im[b]=im[a]-ti;re[a]+=tr;im[a]+=ti}}
+  if(inv)for(let i=0;i<N;i++){re[i]/=N;im[i]/=N}}
+async function vocalFocus(L,R,SR,onProg){
+  const N=1024,H=N/2,F=fftInit(N),win=new Float32Array(N);for(let i=0;i<N;i++)win[i]=Math.sqrt(0.5-0.5*Math.cos(2*Math.PI*i/N));
+  const len=L.length,out=new Float32Array(len+N),re=new Float32Array(N),im=new Float32Array(N);
+  const band=new Float32Array(N/2+1);for(let k=0;k<=N/2;k++){const f=k*SR/N;band[k]=f<120?0.05:f<200?0.05+0.95*(f-120)/80:f<5000?1:f<7000?1-(f-5000)/2000*0.9:0.1}
+  const stereo=!!R;let frames=0;const total=Math.ceil(len/H);
+  for(let p=-H;p<len;p+=H){
+    for(let i=0;i<N;i++){const j=p+i;const l=j>=0&&j<len?L[j]:0,r=stereo?(j>=0&&j<len?R[j]:0):l;re[i]=l*win[i];im[i]=r*win[i]}
+    fft(F,re,im,false);
+    const Yr=new Float32Array(N),Yi=new Float32Array(N);
+    for(let k=0;k<=N/2;k++){const k2=(N-k)%N;
+      const lr=(re[k]+re[k2])/2,li=(im[k]-im[k2])/2,rr=(im[k]+im[k2])/2,ri=-(re[k]-re[k2])/2; // espectros de L e R
+      let m=1;if(stereo){const el=lr*lr+li*li,er=rr*rr+ri*ri,cr=lr*rr+li*ri;const sim=el+er>1e-12?Math.max(0,2*cr/(el+er)):0;m=sim*sim*sim}
+      const g=m*band[k];Yr[k]=(lr+rr)/2*g;Yi[k]=(li+ri)/2*g;if(k&&k<N/2){Yr[N-k]=Yr[k];Yi[N-k]=-Yi[k]}}
+    fft(F,Yr,Yi,true);
+    for(let i=0;i<N;i++){const j=p+i;if(j>=0&&j<len)out[j]+=Yr[i]*win[i]}
+    if(++frames%2000===0){onProg&&onProg(frames/total);await new Promise(r=>setTimeout(r,0))}}
+  return out.subarray(0,len);
+}
 async function transcribeAudio(dec,opts){
   opts=opts||{};const SR=16000;
-  const y=await resample16(dec.x,dec.sr);
+  let y=await resample16(dec.x,dec.sr);
+  if(opts.focus!==false){
+    const L=dec.st?await resample16(dec.st.L,dec.sr):y,R=dec.st?await resample16(dec.st.R,dec.sr):null;
+    y=await vocalFocus(L,R,SR,p=>opts.onProg&&opts.onProg(p*0.15))}
   const chunks=cutChunks(y,SR);if(!chunks.length)return [];
   const res=new Array(chunks.length);let done=0,next=0,fatal=null;
   const one=async k=>{const [a,b]=chunks[k];const audio=wavB64(y.subarray(a,b),SR);
@@ -760,12 +792,33 @@ async function transcribeAudio(dec,opts){
         res[k]=(r.words||[]).map(w=>({...w,s:w.s+a/SR,e:w.e+a/SR}));return}
       catch(e){if(e.status===401){mapErr(e);throw e}if(e.status&&e.status<500&&e.status!==429)throw e;if(e.status===429)throw e;
         if(tr===2)throw e;await new Promise(r=>setTimeout(r,1200*(tr+1)))}}};
-  const worker=async()=>{while(next<chunks.length&&!fatal){const k=next++;try{await one(k)}catch(e){fatal=e;return}done++;opts.onProg&&opts.onProg(done/chunks.length)}};
+  const worker=async()=>{while(next<chunks.length&&!fatal){const k=next++;try{await one(k)}catch(e){fatal=e;return}done++;opts.onProg&&opts.onProg(0.15+0.85*done/chunks.length)}};
   await Promise.all([worker(),worker(),worker()]);
   if(fatal)throw fatal;
   // junta, sem palavras repetidas na emenda dos pedaços
   const all=[];res.forEach(ws=>(ws||[]).forEach(w=>{const l=all[all.length-1];if(l&&w.s<l.e-0.05&&w.w.toLowerCase()===l.w.toLowerCase())return;all.push(w)}));
   return all;
+}
+
+/* revisão da letra pela IA: corrige palavras mal ouvidas mantendo o tempo de cada uma */
+async function fixLyricWords(words,res,opts){
+  opts=opts||{};
+  const P=lyrPrep(res,words);if(!P.lines.length)return {words,fixed:0};
+  const raw=P.lines.map(L=>L.words.map(w=>w.w).join(' '));
+  let r;try{r=await api('POST','/api/lyrics/fix',{lines:raw,title:opts.title||'',lang:opts.lang||'pt'})}catch(e){return {words,fixed:0}}
+  if(!r||!r.ok||!Array.isArray(r.lines)||r.lines.length!==raw.length)return {words,fixed:0};
+  const out=[];let fixed=0;
+  P.lines.forEach((L,i)=>{
+    const c=String(r.lines[i]||'').trim();
+    if(!c||c===raw[i]){out.push(...L.words);return}
+    fixed++;
+    const toks=c.split(/\s+/);
+    if(toks.length===L.words.length){toks.forEach((t,k)=>out.push({...L.words[k],w:t}));return}
+    // quantidade de palavras mudou: reparte o tempo da frase pelo tamanho das palavras
+    const tot=toks.reduce((a,t)=>a+t.length+1,0),span=Math.max(0.2,L.e-L.s);let t0=L.s;
+    toks.forEach((t,k)=>{const d=span*(t.length+1)/tot;out.push({w:t,s:+t0.toFixed(2),e:+(t0+d*0.9).toFixed(2),...(k===toks.length-1&&L.words[L.words.length-1].seg?{seg:1}:{})});t0+=d});
+  });
+  return {words:out,fixed};
 }
 
 /* ============ Utilidades de UI ============ */
@@ -1972,7 +2025,9 @@ async function decodeAudio(file){
   const sr=ab.sampleRate,len=Math.min(ab.length,sr*600);
   const x=new Float32Array(len);
   for(let c=0;c<ab.numberOfChannels;c++){const d=ab.getChannelData(c);for(let i=0;i<len;i++)x[i]+=d[i]/ab.numberOfChannels}
-  return {x,sr,cut:ab.length>len};
+  // estéreo guardado à parte: serve para isolar a voz (que fica no centro) na transcrição da letra
+  const st=ab.numberOfChannels>=2?{L:ab.getChannelData(0).slice(0,len),R:ab.getChannelData(1).slice(0,len)}:null;
+  return {x,sr,cut:ab.length>len,st};
 }
 /* junta a cifra com letra (PDF/texto) com o que a gravação revelou */
 function keyShift(from,to){
@@ -2016,43 +2071,83 @@ function combineChart(res,text){
     content:`@Roteiro da gravação: ${roteiro}\n\n${content}`};
 }
 /* letra transcrita (palavras com tempo) + acordes do áudio → cifra no formato Cifra Club */
-function lyricChart(res,words){
+const LYR_PROPER=/^(Deus|Senhor|Cristo|Jesus|Pai|Rei|Messias|Espírito|Santo|Ele|Teu|Teus|Tua|Tuas|Tu|Te|Ti|Seu|Seus|Sua|Suas|Lhe|Dele|Dela|Nele|Aleluia|Hosana|Jeová|Javé|Emanuel|Yeshua|Israel|Sião|Jerusalém|I|God|Lord|Jesus|He|His|Him|You|Your)$/;
+const lyrNorm=w=>String(w).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9ç]+/g,'');
+function lyrPrep(res,words){
   const W=(words||[]).map(w=>({...w,w:String(w.w||'').replace(/^[-–—"“”']+|["“”]+$/g,'').trim()})).filter(w=>w.w&&w.e>=w.s).sort((a,b)=>a.s-b.s);
-  if(!W.length)return null;
-  const spb=60/Math.max(30,res.bpm||90),gapMin=Math.max(3,8*spb),dur=res.duration||(W[W.length-1].e+5);
-  // trocas de acorde no tempo
+  const spb=60/Math.max(30,res.bpm||90),gapMin=Math.max(3,8*spb),dur=res.duration||((W.length?W[W.length-1].e:0)+5);
   const ch=[];let last=null;
   res.beats.forEach((t,b)=>{const c=res.beatChord[b];if(!c||c==='N')return;if(c!==last){ch.push({t,c});last=c}});
   const chordAt=t=>{let c=null;for(const x of ch){if(x.t<=t+0.05)c=x.c;else break}return c};
-  const secs=(res.sections&&res.sections.length?res.sections:[{name:'Música',t:0}]).map((s,i,a)=>({name:s.name,t0:i?s.t:0,t1:i+1<a.length?a[i+1].t:dur}));
-  const secOf=t=>{let k=0;secs.forEach((s,i)=>{if(s.t0<=t+0.3)k=i});return k};
-  // frases (linhas da letra)
+  const barT=res.bars&&res.bars.length?res.bars.map(b=>b.t):res.beats.filter((_,i)=>i%4===0);
+  const nearBar=t=>barT.some(b=>Math.abs(b-t)<Math.max(0.18,spb*0.35));
+  const secs=(res.sections&&res.sections.length?res.sections:[{name:'Música',t:0}]).map((x,i,a)=>({name:x.name,t0:i?x.t:0,t1:i+1<a.length?a[i+1].t:dur}));
+  const secOf=t=>{let k=0;secs.forEach((x,i)=>{if(x.t0<=t+0.3)k=i});return k};
+  // ---- frases ----
   const lines=[];let cur=null;
-  W.forEach((w,i)=>{const p=W[i-1];
-    const len=cur?cur.words.reduce((a,x)=>a+x.w.length+1,0):0;
-    const brk=!cur||w.s-p.e>0.6||/[.!?…]$/.test(p.w)||(p.seg&&len>=14)||len+w.w.length>46||(/[,;]$/.test(p.w)&&len>=28)||secOf(w.s)!==cur.sec;
+  const lenOf=L=>L?L.words.reduce((a,x)=>a+x.w.length+1,0):0;
+  W.forEach((w,i)=>{const p=W[i-1];const len=lenOf(cur),gap=p?w.s-p.e:9;
+    const capNew=/^[A-ZÀ-Ý]/.test(w.w)&&!LYR_PROPER.test(w.w.replace(/[^\wÀ-ÿ]/g,''));
+    const brk=!cur
+      ||gap>1.2
+      ||(gap>0.45&&len>=8)
+      ||(/[.!?…]$/.test(p.w)&&len>=4)
+      ||(/[,;:]$/.test(p.w)&&len>=14)
+      ||(capNew&&len>=12)
+      ||(p.seg&&len>=16)
+      ||(len>=24&&nearBar(w.s)&&gap>0.12)
+      ||len+w.w.length>40
+      ||secOf(w.s)!==cur.sec;
     if(brk){cur={words:[],sec:secOf(w.s)};lines.push(cur)}
     cur.words.push(w)});
-  lines.forEach(L=>{L.s=L.words[0].s;L.e=L.words[L.words.length-1].e});
-  // ajuda: monta uma linha de acordes posicionados
-  const place=items=>{let s='';items.forEach(({pos,c})=>{const p=Math.max(pos,s.length?s.length+1:0);s=s.padEnd(p)+c});return s};
+  // frase de 1 palavra solta no fim de outra: junta com a vizinha mais próxima
+  for(let i=lines.length-1;i>0;i--){const L=lines[i],P=lines[i-1];
+    if(L.words.length===1&&L.sec===P.sec&&L.words[0].s-P.words[P.words.length-1].e<0.5&&lenOf(P)+L.words[0].w.length<44&&!/^[A-ZÀ-Ý]/.test(L.words[0].w)){P.words.push(...L.words);lines.splice(i,1)}}
+  lines.forEach(L=>{L.s=L.words[0].s;L.e=L.words[L.words.length-1].e;
+    const parts=L.words.map((w,i)=>i===0?w.w.charAt(0).toUpperCase()+w.w.slice(1):w.w);let text='';const st=[];
+    parts.forEach((p,i)=>{if(i)text+=' ';st.push(text.length);text+=p});
+    L.text=text.replace(/[,;.:]+$/,'');L.st=st;L.norm=L.words.map(w=>lyrNorm(w.w)).filter(Boolean)});
+  // ---- partes: usa também a letra ----
+  const simL=(a,b)=>{const A=new Set(a),B=new Set(b);let n=0;A.forEach(x=>{if(B.has(x))n++});return 2*n/Math.max(1,A.size+B.size)};
+  lines.forEach((L,i)=>{L.rep=lines.some((M,j)=>j!==i&&Math.abs(M.s-L.s)>8&&L.norm.length>=3&&simL(L.norm,M.norm)>=0.6)});
+  secs.forEach((x,si)=>{const Ls=lines.filter(L=>L.sec===si);x.lines=Ls.length;x.repFrac=Ls.length?Ls.filter(L=>L.rep).length/Ls.length:0});
+  secs.forEach((x,si)=>{if(x.lines>=2&&/^(Intro|Final)$/.test(x.name)){
+    const other=secs.find((y,k)=>k!==si&&y.lines>=2&&!/^(Intro|Final|Ponte)/.test(y.name));x.name=other?other.name:'Primeira Parte'}});
   const pad=toks=>toks.map(t=>t.padEnd(Math.max(4,t.length+2))).join('').trimEnd();
-  const barT=res.bars&&res.bars.length?res.bars.map(b=>b.t):res.beats.filter((_,i)=>i%4===0);
-  const rowsOf=(a,z)=>{ // trecho só instrumental: 4 compassos por linha, alinhado ao compasso
+  const rowsOf=(a,z)=>{
     if(z-a<0.5)return [];
-    const st=barT.filter(t=>t>=a-0.3&&t<z-0.5);
-    if(!st.length||st[0]-a>2*spb)st.unshift(a);
+    const stt=barT.filter(t=>t>=a-0.3&&t<z-0.5);
+    if(!stt.length||stt[0]-a>2*spb)stt.unshift(a);
     const rows=[];let lastTok=null;
-    for(let i=0;i<st.length;i+=4){const t0=st[i],t1=i+4<st.length?st[i+4]:z;
+    for(let i=0;i<stt.length;i+=4){const t0=stt[i],t1=i+4<stt.length?stt[i+4]:z;
       const toks=[];const c0=chordAt(t0+0.05);if(c0)toks.push(c0);
       ch.forEach(x=>{if(x.t>t0+0.05&&x.t<t1-0.05&&x.c!==toks[toks.length-1])toks.push(x.c)});
       if(!toks.length)continue;
-      if(t1-t0<4*spb*0.9&&toks.length===1&&toks[0]===lastTok)continue; // sobra de menos de 1 compasso
+      if(t1-t0<4*spb*0.9&&toks.length===1&&toks[0]===lastTok)continue;
+      if(i+4>=stt.length&&rows.length&&toks.length===1&&t1-t0<8*spb)continue; // sobra curta no fim
       lastTok=toks[toks.length-1];rows.push(pad(toks))}
     const out=[];for(let i=0;i<rows.length;){let k=1;while(i+k<rows.length&&rows[i+k]===rows[i])k++;out.push(rows[i]+(k>1?`  (${k}x)`:''));i+=k}
     return out};
+  // acordes em cima da frase: cada troca vai na palavra cantada naquele instante
+  const chordLine=(L,winA,winZ,carry)=>{
+    const items=[];const c0=chordAt(L.s+0.05);
+    ch.filter(x=>x.t>=winA&&x.t<winZ).forEach(x=>{
+      let k=-1;L.words.forEach((w,i)=>{if(w.s<=x.t+0.15)k=i});
+      let pos;if(k<0)pos=0;else if(x.t>L.e+0.25)pos=L.text.length+2;else{
+        // troca no meio de uma palavra longa: aproxima a sílaba
+        const w=L.words[k],frac=w.e>w.s?Math.min(1,Math.max(0,(x.t-w.s)/(w.e-w.s))):0;
+        pos=L.st[k]+(w.w.length>5&&frac>0.45?Math.min(w.w.length-2,Math.round(frac*w.w.length)):0)}
+      if(items.length&&items[items.length-1].c===x.c)return;
+      items.push({pos,c:x.c})});
+    if(c0&&!(items.length&&items[0].pos===0)&&!(carry===c0&&items.length&&items[0].pos<=Math.max(8,L.text.length/3)))items.unshift({pos:0,c:c0});
+    L.lastChord=items.length?items[items.length-1].c:c0;
+    let s2='';items.forEach(({pos,c})=>{const p=Math.max(pos,s2.length?s2.length+1:0);s2=s2.padEnd(p)+c});return s2};
+  return {W,ch,chordAt,secs,lines,spb,gapMin,dur,rowsOf,chordLine,simL};
+}
+function lyricChart(res,words){
+  const P=lyrPrep(res,words);if(!P.W.length)return null;
+  const {secs,lines,gapMin,rowsOf,chordLine,chordAt}=P;
   const brkIn=(a,z)=>(res.breaks||[]).filter(t=>t>=a&&t<z);
-  const cap=s=>s.charAt(0).toUpperCase()+s.slice(1);
   const out=[];
   secs.forEach((sec,si)=>{
     const Ls=lines.filter(L=>L.sec===si);
@@ -2063,28 +2158,117 @@ function lyricChart(res,words){
       out.push(`[${sec.name}]`,...r);brkIn(sec.t0,sec.t1).forEach(t=>out.push(`@Convenção: parada em ${fmtT(t)}`));out.push('');return}
     Ls.forEach((L,li)=>{
       const next=li+1<Ls.length?Ls[li+1].s:sec.t1;
-      if(L.s-cursor>=gapMin)body.push(...rowsOf(cursor,L.s-0.3));
-      const winA=L.s-0.35,winZ=(next-L.e>=gapMin?L.e+spb:next)-0.35;
-      // texto da letra e onde cada palavra começa
-      const parts=L.words.map((w,i)=>i===0?cap(w.w):w.w);let text='';const st=[];
-      parts.forEach((p,i)=>{if(i)text+=' ';st.push(text.length);text+=p});
-      text=text.replace(/[,;.]+$/,'');
-      const items=[];
-      const c0=chordAt(L.s+0.05);
-      ch.filter(x=>x.t>=winA&&x.t<winZ).forEach(x=>{
-        let k=-1;L.words.forEach((w,i)=>{if(w.s<=x.t+0.15)k=i});
-        let pos;if(k<0)pos=0;else if(x.t>L.e+0.25)pos=text.length+2;else pos=st[k];
-        if(items.length&&items[items.length-1].c===x.c)return;
-        items.push({pos,c:x.c})});
-      if(c0&&!(items.length&&items[0].pos===0))items.unshift({pos:0,c:c0});
-      const cl=place(items);
+      if(L.s-cursor>=gapMin){const r=rowsOf(cursor,L.s-0.3);
+        // não repete uma linha só com o mesmo acorde que já abre a frase
+        if(!(r.length===1&&r[0].trim()===chordAt(L.s+0.05)))body.push(...r)}
+      const winA=L.s-0.35,winZ=(next-L.e>=gapMin?L.e+P.spb:next)-0.35;
+      const prevL=li>0?Ls[li-1]:null;
+      const cl=chordLine(L,winA,winZ,prevL&&L.s-prevL.e<gapMin?prevL.lastChord:null);
       if(cl.trim())body.push(cl);
-      body.push(text);
+      body.push(L.text);
       brkIn(cursor,winZ+0.35).forEach(t=>body.push(`@Convenção: parada em ${fmtT(t)}`));
       cursor=winZ+0.35});
     if(sec.t1-cursor>=gapMin)body.push(...rowsOf(cursor,sec.t1));
-    out.push(`[${sec.name}]`,...body,'')});
+    // parte com o mesmo nome logo em seguida: continua sem repetir o título
+    const prevName=out.length?(out.slice().reverse().find(l=>/^\[/.test(l))||''):'';
+    if(prevName===`[${sec.name}]`&&out[out.length-1]===''){out.pop();out.push(...body,'')}
+    else out.push(`[${sec.name}]`,...body,'')});
   return out.join('\n').replace(/\n{3,}/g,'\n\n').replace(/\s+$/,'');
+}
+/* cifra anexada (correta) + gravação: a letra transcrita diz QUAL trecho da cifra está sendo cantado e QUANDO.
+   Resultado: a cifra inteira na ordem exata desta gravação, com repetições, tempos, falas e trechos instrumentais. */
+function wordSim(a,b){
+  if(a===b)return 1;if(!a||!b)return 0;
+  if(a.length>=4&&b.length>=4&&(a.startsWith(b)||b.startsWith(a)))return 0.85;
+  const m=a.length,n=b.length;if(Math.abs(m-n)>3)return 0;
+  let prev=Array.from({length:n+1},(_,i)=>i);
+  for(let i=1;i<=m;i++){const cur=[i];for(let k=1;k<=n;k++)cur[k]=Math.min(prev[k]+1,cur[k-1]+1,prev[k-1]+(a[i-1]===b[k-1]?0:1));prev=cur}
+  const r=1-prev[n]/Math.max(m,n);return r>=0.6?r:0;
+}
+function lineMatch(T,U){ // quanto a frase ouvida T bate com a linha da cifra U (0..1)
+  if(!T.length||!U.length)return 0;
+  const used=new Uint8Array(U.length);let hit=0;
+  T.forEach(w=>{let bi=-1,bv=0;U.forEach((u,k)=>{if(used[k])return;const v=wordSim(w,u);if(v>bv){bv=v;bi=k}});if(bi>=0&&bv>0){used[bi]=1;hit+=bv}});
+  const cov=hit/T.length,dice=2*hit/(T.length+U.length);
+  return 0.55*cov+0.45*dice;
+}
+function chartUnits(content){
+  const lines=content.split('\n'),U=[];let sec='Início',pendChord=null,pendBlk=[];
+  const flushChord=()=>{if(pendChord!=null){U.push({sec,chord:pendChord,lyric:null,blk:pendBlk});pendBlk=[];pendChord=null}};
+  lines.forEach(line=>{
+    const t=classify(line);
+    const hdr=line.match(/^\s*\[([^\]]+)\]\s*(.*)$/);
+    if(hdr&&!isChord(hdr[1].trim())){flushChord();sec=hdr[1].trim();
+      if(hdr[2].trim())U.push({sec,chord:hdr[2].trim(),lyric:null,blk:[],inline:true});return}
+    if(t==='sec'){flushChord();sec=line.trim().replace(/:$/,'');return}
+    if(t==='gap')return;
+    if(t==='blk'){pendBlk.push(line);return}
+    if(t==='ch'){flushChord();pendChord=line.replace(/\s+$/,'');return}
+    if(t==='ly'||t==='cp'){U.push({sec,chord:pendChord,lyric:line.replace(/\s+$/,''),blk:pendBlk});pendChord=null;pendBlk=[];return}
+    flushChord();U.push({sec,chord:line,lyric:null,blk:[]});
+  });
+  flushChord();
+  U.forEach((u,i)=>{u.i=i;u.norm=u.lyric?u.lyric.replace(/\[[^\]]*\]/g,' ').split(/\s+/).map(lyrNorm).filter(Boolean):[]});
+  return U;
+}
+function recordingChart(res,words,text){
+  const P=lyrPrep(res,words);if(!P.lines.length)return null;
+  const c=cleanImport(text);
+  const ck=c.key||detectKey(c.content),semis=keyShift(ck,res.key),flat=keyFlat(ck,semis);
+  const content=semis?transposeText(c.content,semis,flat):c.content;
+  const key=semis&&ck?transposeChord(ck,semis,flat):(ck||res.key);
+  const U=chartUnits(content),LU=U.filter(u=>u.norm.length);
+  if(LU.length<2)return null;
+  // 1) cada frase ouvida → melhor linha da cifra (preferindo continuar de onde parou)
+  let lastI=-1;
+  const M=P.lines.map(L=>{
+    let best=null,bv=0;
+    LU.forEach(u=>{let v=lineMatch(L.norm,u.norm);
+      // frase ouvida que cobre 2 linhas da cifra
+      const nx=LU.find(x=>x.i>u.i);if(nx&&L.norm.length>u.norm.length+1){const v2=lineMatch(L.norm,u.norm.concat(nx.norm));if(v2>v){v=v2}}
+      if(lastI>=0){if(u.i>lastI&&u.i<=lastI+3)v+=0.12;else if(u.i===lastI)v+=0.04}
+      if(v>bv){bv=v;best=u}});
+    const ok=best&&bv>=0.5&&L.norm.length>=1;
+    if(ok)lastI=best.i;
+    return {L,u:ok?best:null,v:bv}});
+  // 2) monta na ordem da gravação
+  const out=[],road=[];let curSec=null,lastU=null,cursor=0;
+  const head=(name,t)=>{out.push('',`[${name}]`);road.push(`${name} (${fmtT(t)})`);curSec=name};
+  const instr=(a,z,name)=>{const r=P.rowsOf(a,z);if(!r.length)return;
+    // usa o trecho instrumental da cifra se houver um logo depois da última linha cantada
+    const nxt=lastU?U.slice(lastU.i+1).find(x=>x.norm.length||x.chord):null;
+    if(nxt&&!nxt.norm.length&&nxt.chord&&(nxt.inline||/solo|intro|final|instrumental|interl[uú]dio|ponte/i.test(nxt.sec))){head(nxt.sec,a);out.push(nxt.chord.trim());lastU=nxt;return}
+    head(name,a);out.push(...r)};
+  const first=P.lines[0].s;
+  if(first>=P.gapMin*0.75)instr(0,first-0.3,'Intro');
+  M.forEach((m,k)=>{
+    const L=m.L,next=k+1<M.length?M[k+1].L.s:P.dur;
+    if(k>0&&L.s-cursor>=P.gapMin*1.5)instr(cursor,L.s-0.3,'Instrumental');
+    if(m.u){
+      const u=m.u;
+      if(lastU&&u.i===lastU.i&&L.s-cursor<P.gapMin){cursor=L.e;return} // mesma linha, partida em duas
+      const restart=!lastU||u.i<=lastU.i||u.sec!==curSec;
+      if(restart)head(u.sec,L.s);
+      else if(u.i>lastU.i+1){ // pulou linhas da cifra (a IA não ouviu): inclui as do meio se couberem
+        U.slice(lastU.i+1,u.i).forEach(x=>{if(x.sec!==u.sec)return;x.blk.forEach(b=>out.push(b));if(x.chord)out.push(x.chord);if(x.lyric)out.push(x.lyric)})}
+      u.blk.forEach(b=>out.push(b));
+      if(u.chord)out.push(u.chord);out.push(u.lyric);
+      // linhas só de acorde que fecham o trecho na cifra (ex.: Em D# D C#)
+      const after=U[u.i+1];if(after&&!after.norm.length&&after.chord&&!after.inline&&after.sec===u.sec){out.push(after.chord);lastU=after}else lastU=u;
+    }else{
+      // frase que não está na cifra (fala, improviso): acordes vindos da gravação
+      if(curSec!=='Fala'&&(!curSec||/^(Intro|Instrumental|Solo|Final)$/i.test(curSec)||(lastU&&!lastU.norm.length)))head('Fala',L.s);
+      const winZ=(next-L.e>=P.gapMin?L.e+P.spb:next)-0.35;
+      const cl=P.chordLine(L,L.s-0.35,winZ,null);
+      out.push((cl.trim()?cl+'\n':'')+L.text+'  (fora da cifra)');
+    }
+    cursor=L.e});
+  if(P.dur-cursor>=P.gapMin)instr(cursor,P.dur,'Final');
+  const matched=M.filter(m=>m.u).length;
+  if(matched<Math.max(3,M.length*0.3))return null; // a gravação não parece ser desta cifra
+  const notes=[c.notes,`${res.bpm} BPM`,semis?`cifra transposta ${semis>0?'+':''}${semis} para o tom da gravação (${key})`:`tom da gravação: ${key}`,`${matched} de ${M.length} frases da gravação encontradas na cifra`].filter(Boolean).join(' · ');
+  return {title:c.title,artist:c.artist,key,bpm:String(res.bpm),notes,semis,chartKey:ck,matched,total:M.length,
+    content:(`@Roteiro da gravação: ${road.join(' → ')}\n`+out.join('\n')).replace(/\n{3,}/g,'\n\n').replace(/\s+$/,'')};
 }
 async function runAudio(file,tempo){
   const out=document.getElementById('audOut');if(!out)return;stopAudio();
@@ -2101,6 +2285,13 @@ async function runAudio(file,tempo){
   drawAudioResult();
   if(!AUD.lyr&&typeof transcribeAudio==='function')startTranscribe(AUD.lang);
 }
+/* vocabulário para a IA: nome da música e, se houver cifra anexada, a letra dela */
+function songTitleOf(file){return titleCase(file.name.replace(/\.[^.]+$/,'').replace(/^[0-9a-f]{6,}[-_ ]+/i,'').replace(/[-_]+/g,' ').replace(/\b(ao vivo|live|lyrics?|letra|official|oficial|video|v[íi]deo|clipe|audio|áudio|hd|4k|cover)\b/gi,'').replace(/[()\[\]]/g,' '))}
+function chartLyrics(text){try{const c=cleanImport(text);return c.content.split('\n').filter(l=>classify(l)==='ly').map(l=>l.trim()).join(' ').replace(/\s+/g,' ')}catch(e){return ''}}
+function lyricPrompt(file){
+  const t=songTitleOf(file);let p=`Letra da música "${t}".`;
+  if(IMP.chart){const ly=chartLyrics(IMP.chart.text);if(ly)p+=' '+ly.slice(0,330)}
+  return p.slice(0,400)}
 async function startTranscribe(lang){
   if(!AUD||!AUD_CACHE||AUD_CACHE.file!==AUD.file)return;
   const C=AUD_CACHE,file=C.file,dec=C.dec;
@@ -2109,8 +2300,11 @@ async function startTranscribe(lang){
   const sync=()=>{if(AUD&&AUD.file===file){AUD.lang=C.lang;AUD.lyr=C.running?{status:'run',p:C.p}:C.lyr;AUD.mode=null;if(document.getElementById('audOut'))drawAudioResult()}};
   sync();
   try{
-    const words=await transcribeAudio(dec,{lang:C.lang,prompt:'Letra de música cantada.',onProg:p=>{C.p=p;const b=document.getElementById('lyrBar');if(b&&AUD&&AUD.file===file)b.style.width=Math.round(p*100)+'%'}});
-    C.lyr=words.length?{status:'done',words}:{status:'err',msg:'Não encontrei voz cantada nesse áudio.'};
+    const words=await transcribeAudio(dec,{lang:C.lang,prompt:lyricPrompt(file),onProg:p=>{C.p=p;const b=document.getElementById('lyrBar');if(b&&AUD&&AUD.file===file)b.style.width=Math.round(p*100)+'%'}});
+    let fin=words,fixed=0;
+    if(words.length&&typeof fixLyricWords==='function'&&AUD&&AUD.res){C.p=0.99;const b=document.getElementById('lyrMsg');if(b)b.textContent='🎤 Revisando a letra com IA…';
+      const fx=await fixLyricWords(words,AUD.res,{title:songTitleOf(file),lang:C.lang});fin=fx.words;fixed=fx.fixed}
+    C.lyr=words.length?{status:'done',words:fin,raw:words,fixed}:{status:'err',msg:'Não encontrei voz cantada nesse áudio.'};
   }catch(e){C.lyr={status:'err',msg:e.message||'Não consegui transcrever a letra.'}}
   C.running=false;
   if(C.lyr.status==='err')C.lyrErr=C.lyr;
@@ -2120,17 +2314,20 @@ let AUD_CACHE=null;
 function drawAudioResult(){
   const out=document.getElementById('audOut');if(!out||!AUD)return;
   const {res,file,dec}=AUD;
-  const comb=IMP.chart?combineChart(res,IMP.chart.text):null;
   const L=AUD.lyr||{},canTr=typeof transcribeAudio==='function';
-  const lyrC=L.status==='done'?lyricChart(res,L.words):null;
+  let comb=null;
+  if(IMP.chart){if(L.status==='done'){try{comb=recordingChart(res,L.raw||L.words,IMP.chart.text)}catch(e){comb=null}if(comb)comb.byRec=true}
+    if(!comb)comb=combineChart(res,IMP.chart.text)}
+  const LW=L.status==='done'?(AUD.lyrRaw&&L.raw?L.raw:L.words):null;
+  const lyrC=LW?lyricChart(res,LW):null;
   if(!AUD.mode||(AUD.mode==='comb'&&!comb)||(AUD.mode==='letra'&&!lyrC))AUD.mode=comb?'comb':lyrC?'letra':'audio';
   const view=AUD.mode==='comb'?comb:AUD.mode==='letra'?{content:lyrC}:null;
   const LANGS=[['pt','Português'],['en','Inglês'],['es','Espanhol'],['it','Italiano'],['fr','Francês']];
   const langSel=`<select class="sm-sel" id="lyrLang" title="Idioma da letra">${LANGS.map(([k,n])=>`<option value="${k}" ${AUD.lang===k?'selected':''}>${n}</option>`).join('')}</select>`;
   const lyrBox=!canTr?`<div class="info">🎤 A <b>transcrição da letra</b> funciona no site do NaNota (com login). Aqui você pode anexar a cifra com letra no campo acima.</div>`
-    :L.status==='run'?`<div class="box2"><div class="hint" style="margin-bottom:6px">🎤 Transcrevendo a letra com IA… os acordes já estão prontos abaixo.</div><div class="bar"><i id="lyrBar" style="width:${Math.round((L.p||0)*100)}%"></i></div></div>`
+    :L.status==='run'?`<div class="box2"><div class="hint" style="margin-bottom:6px" id="lyrMsg">🎤 Isolando a voz e transcrevendo a letra com IA… os acordes já estão prontos abaixo.</div><div class="bar"><i id="lyrBar" style="width:${Math.round((L.p||0)*100)}%"></i></div></div>`
     :L.status==='err'?`<div class="info warn">🎤 ${esc(L.msg)} <span class="chips" style="display:inline-flex">${langSel}<button class="btn sm" data-lyr="go">Tentar de novo</button></span></div>`
-    :L.status==='done'?`<div class="chips"><span class="chip">🎤 Letra: <b>${L.words.length} palavras</b></span>${langSel}<button class="btn sm" data-lyr="go" title="Transcrever de novo no idioma escolhido">↻ Transcrever de novo</button></div>`
+    :L.status==='done'?`<div class="chips"><span class="chip">🎤 Letra: <b>${L.words.length} palavras</b></span>${L.fixed?`<button class="btn sm ${AUD.lyrRaw?'':'primary'}" data-lyrraw="1" title="A IA revisou palavras mal ouvidas. Toque para comparar com a transcrição original.">✨ ${AUD.lyrRaw?'Ver letra revisada':`IA revisou ${L.fixed} frase${L.fixed>1?'s':''} · ver original`}</button>`:''}${langSel}<button class="btn sm" data-lyr="go" title="Transcrever de novo no idioma escolhido">↻ Transcrever de novo</button></div>`
     :`<div class="chips">${langSel}<button class="btn sm primary" data-lyr="go">🎤 Transcrever a letra</button></div>`;
   const t=AUD.audio?AUD.audio.currentTime:0,wasPlaying=!!(AUD.audio&&!AUD.audio.paused);
   out.innerHTML=`<audio controls src="${AUD.url}" id="audEl"></audio>
@@ -2138,13 +2335,13 @@ function drawAudioResult(){
       <button class="btn sm" data-tempo="half" title="Use se a música for lenta e o andamento parecer o dobro">½ andamento</button><button class="btn sm" data-tempo="double" title="Use se o andamento parecer a metade">2× andamento</button>
       <span class="chip">${res.sections.length} partes</span>${Math.abs(res.tuning)>=10?`<span class="chip">Afinação: <b>${res.tuning>0?'+':''}${res.tuning} cents</b></span>`:''}${res.breaks.length?`<span class="chip">${res.breaks.length} parada(s)</span>`:''}${dec.cut?'<span class="chip">Analisados os primeiros 10 min</span>':''}</div>
     ${lyrBox}
-    ${comb||lyrC?`<div class="chips">${lyrC?`<button class="btn sm ${AUD.mode==='letra'?'primary':''}" data-mode="letra">🎤+🎧 Letra transcrita + acordes</button>`:''}${comb?`<button class="btn sm ${AUD.mode==='comb'?'primary':''}" data-mode="comb">📄+🎧 Cifra anexada + gravação</button>`:''}<button class="btn sm ${AUD.mode==='audio'?'primary':''}" data-mode="audio">🎧 Só os acordes</button></div>`:''}
+    ${comb||lyrC?`<div class="chips">${lyrC?`<button class="btn sm ${AUD.mode==='letra'?'primary':''}" data-mode="letra">🎤+🎧 Letra transcrita + acordes</button>`:''}${comb?`<button class="btn sm ${AUD.mode==='comb'?'primary':''}" data-mode="comb">📄+🎧 ${comb.byRec?'Cifra anexada na ordem da gravação':'Cifra anexada + gravação'}</button>`:''}<button class="btn sm ${AUD.mode==='audio'?'primary':''}" data-mode="audio">🎧 Só os acordes</button></div>`:''}
     ${comb&&AUD.mode==='comb'?`
-      <div class="info">${comb.semis?`A cifra está em <b>${esc(comb.chartKey)}</b> e a gravação em <b>${esc(res.key)}</b> — transpus a cifra <b>${comb.semis>0?'+':''}${comb.semis}</b>.`:`A cifra (${esc(comb.chartKey||'—')}) está no mesmo tom da gravação.`} O roteiro mostra a ordem das partes nesta versão.</div>`:''}
+      <div class="info">${comb.semis?`A cifra está em <b>${esc(comb.chartKey)}</b> e a gravação em <b>${esc(res.key)}</b> — transpus a cifra <b>${comb.semis>0?'+':''}${comb.semis}</b>.`:`A cifra (${esc(comb.chartKey||'—')}) está no mesmo tom da gravação.`} ${comb.byRec?` Encontrei <b>${comb.matched} de ${comb.total}</b> frases cantadas na cifra: ela foi montada na ordem exata desta gravação, com as repetições. Frases que não estão na cifra (falas, improvisos) aparecem marcadas “fora da cifra”, com os acordes ouvidos.`:` O roteiro mostra a ordem das partes nesta versão.${canTr&&L.status!=='done'?' Quando a letra terminar de ser transcrita, a cifra é remontada na ordem exata da gravação.':''}`}</div>`:''}
     ${AUD.mode==='letra'?'<div class="info">Cada acorde está em cima da palavra cantada no momento em que ele soa. Confira a letra: a IA pode errar palavras quando a voz está baixa ou embolada com os instrumentos.</div>':''}
     <div class="ptitle">Partes — toque para ouvir</div>
     <div class="chips" id="audSec">${res.sections.map(s=>`<button class="btn sm" data-t="${s.t}">${esc(s.name)} · ${fmtT(s.t)}</button>`).join('')}</div>
-    <div class="ptitle">${AUD.mode==='comb'?'Cifra final (letra da cifra + dados da gravação)':AUD.mode==='letra'?'Cifra completa: letra transcrita + acordes da gravação':'Cifra gerada do áudio'}</div>
+    <div class="ptitle">${AUD.mode==='comb'?(comb.byRec?'Cifra final: cifra anexada na ordem da gravação':'Cifra final (letra da cifra + dados da gravação)'):AUD.mode==='letra'?'Cifra completa: letra transcrita + acordes da gravação':'Cifra gerada do áudio'}</div>
     <div class="sheet" style="padding:10px 12px;font-size:14px;max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:10px">${renderSheet(view?view.content:res.content,0,false,true)}</div>
     <div class="ptitle">Acordes no tempo — o atual acende enquanto toca</div>
     <div class="tl" id="audTl">${res.segs.map((g,i)=>`<button data-k="${i}" data-t="${g.t0}"><b>${esc(g.c)}</b><small>${fmtT(g.t0)}</small></button>`).join('')}</div>
@@ -2155,6 +2352,7 @@ function drawAudioResult(){
     if(k!==cur){if(cur>=0&&btns[cur])btns[cur].classList.remove('cur');cur=k;if(k>=0){btns[k].classList.add('cur');btns[k].scrollIntoView({block:'nearest'})}}});
   out.onclick=e=>{
     const md=e.target.closest('[data-mode]');if(md){AUD.mode=md.dataset.mode;drawAudioResult();return}
+    const lr=e.target.closest('[data-lyrraw]');if(lr){AUD.lyrRaw=!AUD.lyrRaw;drawAudioResult();return}
     const ly=e.target.closest('[data-lyr]');if(ly){const sel=out.querySelector('#lyrLang');startTranscribe(sel?sel.value:'pt');return}
     const tp=e.target.closest('[data-tempo]');if(tp){runAudio(file,tp.dataset.tempo);return}
     const b=e.target.closest('[data-t]');if(!b)return;audio.currentTime=+b.dataset.t;audio.play().catch(()=>{})};
