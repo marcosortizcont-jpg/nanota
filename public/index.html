@@ -187,6 +187,8 @@ textarea.code{font-family:'JetBrains Mono',monospace;font-size:14px;line-height:
 .np-secs button.on{background:var(--sec);border-color:var(--sec);color:#06121c}
 .np-body{flex:1;overflow:auto;position:relative;overscroll-behavior:contain;scroll-behavior:auto}
 .npsong{padding:6px 0 26px;border-bottom:2px dashed var(--line)}
+.npsong .sheet{overflow-x:hidden}
+.npsong .np-fit{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:99px;padding:1px 7px}
 .np-h{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:12px;padding:10px 22px;background:color-mix(in srgb,var(--bg) 92%,transparent);backdrop-filter:blur(6px)}
 .np-h .np-n{font-family:'JetBrains Mono',monospace;font-weight:700;color:var(--accentText);background:var(--accent);border-radius:8px;padding:2px 9px;font-size:15px}
 .np-h .np-t{font-weight:700;font-size:20px;letter-spacing:-.01em}
@@ -941,6 +943,7 @@ function renderSet(){
     ${G&&!G.isOwner?`<div class="info" style="margin-bottom:12px">👥 Repertório de <b>${esc(G.ownerName||'outra pessoa')}</b>. Você pode: <b>${['list','transpose','songs','manage'].filter(P).map(k=>({list:'editar a lista',transpose:'mudar o tom',songs:'editar as cifras',manage:'gerenciar membros'})[k]).join(', ')||'só visualizar e tocar'}</b>.</div>`:''}
     <div class="sethead"><input type="text" class="name" id="setName" value="${esc(set.name||'')}" placeholder="Nome do repertório" ${ro}><input type="date" id="setDate" value="${esc(set.date||'')}" ${ro}></div>
     <div class="setactions">
+      <button class="btn" data-act="set-print" data-id="${set.id}" ${items.length?'':'disabled'} title="Imprimir todas as cifras do repertório (uma por página)">🖨 Imprimir</button>
       <button class="btn primary" data-act="noplay" data-id="${set.id}" ${items.length?'':'disabled'} title="Repertório inteiro em uma tela, com troca rápida de música e de trecho">▶ NoPlay</button>
       <button class="btn" data-act="play-set" data-id="${set.id}" ${items.length?'':'disabled'} title="Uma música por vez">Palco</button>
       ${P('list')?'<button class="btn" data-act="set-add">+ Adicionar músicas</button>':''}
@@ -1202,6 +1205,7 @@ function renderViewer(keep){
       ${Object.entries(songLinks(s)).map(([k,u])=>`<a class="btn icon" href="${esc(u)}" target="_blank" rel="noopener" title="Ouvir no ${esc(k)}">${{youtube:'▶ YT',spotify:'♫ Spotify',deezer:'♫ Deezer',outro:'↗ Ouvir'}[k]}</a>`).join('')}
       <button class="btn icon" data-act="v-list" title="Lista (L)">☰</button>
       ${e.song&&(v.ctx==='set'?setPerm(set,'songs'):canEditSong(e.song))?`<button class="btn icon hide-sm" data-act="v-edit" title="${v.ctx==='set'?'Editar a versão deste repertório (E)':'Editar (E)'}">✎</button>`:''}
+      <button class="btn icon" data-act="v-print" title="Imprimir / salvar PDF (P)">🖨</button>
       <button class="btn icon hide-sm" data-act="v-full" title="Tela cheia (F)">⛶</button>
     </div>
     <div class="vscroll" id="vscroll"><div class="sheet ${P.cols?'cols':''} ${P.showChords?'':'nochords'} ${keep?'':(v.dir==='next'?'anim-next':v.dir==='prev'?'anim-prev':'')}" style="font-size:${P.font}px">
@@ -1216,6 +1220,47 @@ function renderViewer(keep){
   drawDrawer();
   bindSwipe();
   if(scrollOn) startScroll();
+}
+/* ---- impressão no estilo Cifra Club, com a marca NaNota ---- */
+const NN_LOGO=`<svg viewBox="0 0 34 34" width="34" height="34" aria-hidden="true"><rect width="34" height="34" rx="9" fill="#f5b43c"/><text x="17" y="23.5" text-anchor="middle" font-family="JetBrains Mono,monospace" font-weight="700" font-size="19" fill="#1a1300">♯</text></svg>`;
+function printSheets(list,set){
+  const P=S.prefs;
+  const pages=list.map((e,i)=>{const s=e.song,flat=keyFlat(s.key,e.semis);
+    const key=s.key?keyAt(s.key,e.semis):'';
+    return `<section class="pg">
+      <header><div class="tt"><h1>${esc(s.title||'Sem título')}</h1>${s.artist?`<h2>${esc(s.artist)}</h2>`:''}
+        <div class="meta">${key?`<span>Tom: <b>${esc(key)}</b></span>`:''}${e.semis&&s.key?`<span>(original: ${esc(s.key)})</span>`:''}${s.bpm?`<span>BPM: <b>${esc(s.bpm)}</b></span>`:''}${set?`<span>Repertório: <b>${esc(set.name)}</b>${list.length>1?` · ${i+1}/${list.length}`:''}</span>`:''}</div></div>
+        <div class="brand">${NN_LOGO}<span>Na<b>Nota</b></span></div></header>
+      <div class="sheet ${P.cols?'cols':''}">${e.notes?`<div class="note">${esc(e.notes)}</div>`:''}${renderSheet(e.content,e.semis,flat,true)}</div>
+      <footer><span>${NN_LOGO.replace(/width="34" height="34"/,'width="14" height="14"')} NaNota · cifras e repertórios</span><span>${new Date().toLocaleDateString('pt-BR')}</span></footer>
+    </section>`}).join('');
+  const css=`@page{size:A4;margin:14mm 14mm 16mm}
+  *{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif;color:#111;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .pg{page-break-after:always;break-after:page;position:relative;min-height:calc(297mm - 30mm)}.pg:last-child{page-break-after:auto;break-after:auto}
+  header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;border-bottom:2px solid #f5b43c;padding-bottom:10px;margin-bottom:14px}
+  h1{font-size:24pt;margin:0;line-height:1.1;font-weight:800;letter-spacing:-.01em}h2{font-size:13pt;margin:4px 0 0;color:#e07b00;font-weight:700}
+  .meta{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:8px;font-size:10pt;color:#444}.meta b{color:#e07b00}
+  .brand{display:flex;align-items:center;gap:7px;font-size:17pt;font-weight:700;white-space:nowrap}.brand b{color:#e07b00}
+  .sheet{font-family:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;font-size:${Math.max(10,Math.min(13,(P.font||18)*0.62)).toFixed(1)}pt;line-height:1.35}
+  .sheet .ch{color:#e07b00;font-weight:700;white-space:pre}.sheet .ly{white-space:pre-wrap}.sheet .tab{white-space:pre;color:#555;font-size:.88em}
+  .sheet .sec{font-family:Inter,system-ui,sans-serif;font-weight:700;margin:.9em 0 .2em;font-size:.85em;text-transform:uppercase;letter-spacing:.06em;color:#1d4ed8}
+  .sheet .gap{height:.7em}.sheet .pair{break-inside:avoid}.sheet .cp{display:inline-block;vertical-align:bottom;white-space:pre}.sheet .cp i{display:block;font-style:normal;color:#e07b00;font-weight:700;padding-right:.35em}
+  .sheet.cols{column-count:2;column-gap:28px;column-rule:1px solid #ddd}
+  .sheet .blk{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 8px;margin:.4em 0;padding:.25em .6em;border-left:3px solid #999;break-inside:avoid}
+  .sheet .blk .bt{font-family:Inter,sans-serif;font-size:.72em;font-weight:700;text-transform:uppercase;letter-spacing:.06em}.sheet .blk .bd{font-family:Inter,sans-serif;font-size:.85em}.sheet .blk .bm{color:#e07b00;font-weight:700;white-space:pre}
+  .b-frase{border-color:#1d4ed8!important}.b-conv{border-color:#b45309!important}.b-pass{border-color:#15803d!important}.b-vir{border-color:#c0392b!important}.b-solo{border-color:#7c3aed!important}
+  .sheet .note{font-family:Inter,sans-serif;font-size:.8em;color:#555;border-left:3px solid #ddd;padding:3px 10px;margin-bottom:1em;white-space:pre-wrap}
+  footer{position:fixed;bottom:0;left:0;right:0;display:flex;justify-content:space-between;font-size:8pt;color:#888;border-top:1px solid #eee;padding-top:4px}
+  footer span{display:flex;align-items:center;gap:4px}
+  @media screen{body{background:#eee}.pg{background:#fff;width:210mm;margin:12px auto;padding:14mm;box-shadow:0 2px 10px rgba(0,0,0,.15)}footer{position:static;margin-top:20px}}`;
+  const html=`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>${esc(list.length===1?(list[0].song.title||'Cifra'):(set?set.name:'Cifras'))} — NaNota</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet"><style>${css}</style></head><body>${pages}</body></html>`;
+  let fr=document.getElementById('printFrame');if(fr)fr.remove();
+  fr=document.createElement('iframe');fr.id='printFrame';fr.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';
+  document.body.appendChild(fr);
+  const d=fr.contentDocument;d.open();d.write(html);d.close();
+  const go=()=>{try{fr.contentWindow.focus();fr.contentWindow.print()}catch(e){toast('A impressão não está disponível aqui. Abra o NaNota no navegador.')}};
+  const fonts=fr.contentDocument.fonts;(fonts&&fonts.ready?Promise.race([fonts.ready,new Promise(r=>setTimeout(r,1500))]):Promise.resolve()).then(()=>setTimeout(go,150));
 }
 function drawDrawer(q){
   const d=document.getElementById('drawer');if(!d)return;const v=S.viewer;
@@ -1293,7 +1338,7 @@ function npSongHTML(set,i){
   const s=e.song,flat=keyFlat(s.key,e.semis),links=songLinks(s);
   return `<section class="npsong" id="nps-${i}"><div class="np-h"><span class="np-n">${i+1}</span>
     <div style="min-width:0"><div class="np-t">${esc(s.title)}</div><div class="np-a">${[s.artist?esc(s.artist):'',s.key?`Tom <b style="color:var(--chord)">${esc(keyAt(s.key,e.semis))}</b>`:'',s.bpm?esc(s.bpm)+' BPM':'',e.arr?'<span class="tag arr">versão do repertório</span>':''].filter(Boolean).join(' · ')}</div></div>
-    <span class="sp"></span>${Object.entries(links).map(([k,u])=>`<a class="btn sm" href="${esc(u)}" target="_blank" rel="noopener">${{youtube:'▶ YT',spotify:'♫ Spotify',deezer:'♫ Deezer',outro:'↗ Ouvir'}[k]}</a>`).join('')}</div>
+    <span class="sp"></span><span class="np-fit" title="Letra reduzida para a cifra caber na largura da tela"></span>${Object.entries(links).map(([k,u])=>`<a class="btn sm" href="${esc(u)}" target="_blank" rel="noopener">${{youtube:'▶ YT',spotify:'♫ Spotify',deezer:'♫ Deezer',outro:'↗ Ouvir'}[k]}</a>`).join('')}</div>
     <div class="sheet ${S.prefs.showChords?'':'nochords'}" style="font-size:${S.prefs.font}px;padding-top:4px">${e.notes?`<div class="note">${esc(e.notes)}</div>`:''}${renderSheet(e.content,e.semis,flat,S.prefs.showChords)}</div></section>`;
 }
 function renderNoPlay(){
@@ -1316,6 +1361,7 @@ function renderNoPlay(){
     <div class="np-foot"><button data-act="np-prev" id="npPrev"><span class="arr">‹</span><span style="min-width:0"><div class="lab">Anterior</div><div class="nm" id="npPrevN"></div></span></button>
       <button data-act="np-next" id="npNext"><span style="min-width:0"><div class="lab">Próxima</div><div class="nm" id="npNextN"></div></span><span class="arr">›</span></button></div>
   </div>`;
+  npFit();
   np.sig=npSig();npAnchors();npSync(true);
   const body=document.getElementById('vscroll');let raf=null;
   body.addEventListener('scroll',()=>{if(raf)return;raf=requestAnimationFrame(()=>{raf=null;npSync(false)})},{passive:true});
@@ -1325,6 +1371,25 @@ function renderNoPlay(){
     if(Date.now()-t0<600&&Math.abs(dx)>70&&Math.abs(dy)<60)npGoSong(np.cur+(dx<0?1:-1),true)},{passive:true});
   if(scrollOn)startScroll();
 }
+/* cada cifra cabe na largura da tela: diminui a letra só o necessário (A−/A+ é o tamanho máximo) */
+function npFit(){
+  const max=S.prefs.font;
+  document.querySelectorAll('.npsong .sheet').forEach(sh=>{
+    sh.style.fontSize=max+'px';
+    const avail=sh.clientWidth-2;if(avail<=0)return;
+    let w=sh.scrollWidth;
+    // mede a linha mais larga (linhas de acorde e letra não quebram)
+    sh.querySelectorAll('.ch,.tab,.pair,.ly,.blk,.cp').forEach(x=>{const r=x.scrollWidth+(x.offsetLeft||0);if(r>w)w=r});
+    const lab=sh.parentElement.querySelector('.np-fit');
+    if(w>avail+6||sh.scrollWidth>sh.clientWidth+1){const f=Math.max(9,Math.floor(max*avail/w*10)/10);sh.style.fontSize=f+'px';
+      // confere e ajusta mais um pouco se ainda passar
+      for(let k=0;k<4&&sh.scrollWidth>sh.clientWidth+1&&parseFloat(sh.style.fontSize)>9;k++)sh.style.fontSize=(parseFloat(sh.style.fontSize)*0.95).toFixed(1)+'px';
+      const pc=Math.round(parseFloat(sh.style.fontSize)/max*100);if(lab)lab.textContent=pc<97?'ajustada '+pc+'%':''}
+    else if(lab)lab.textContent='';
+  });
+}
+let npFitT=null;
+window.addEventListener('resize',()=>{if(S.view!=='noplay'||!document.querySelector('.np'))return;clearTimeout(npFitT);npFitT=setTimeout(()=>{const y=npKeepScroll();npFit();npAnchors();y()},150)});
 function npAnchors(){
   const set=S.sets[S.np.setId];
   S.np.anchors=set.items.map((_,i)=>{const el=document.getElementById('nps-'+i);if(!el)return [];
@@ -1439,7 +1504,7 @@ function parseLink(raw){
   else{title=nice(seg[seg.length-1]||'')}
   return {kind:'site',site,artist,title,url:url.href,lyricsOnly};
 }
-const JUNK_RE=/^\s*(composi[çc][ãa]o|letra e m[úu]sica|cifra club|exibir|vers[ãa]o\b|colabora[çc][ãa]o|enviad[ao] por|revis[ãa]o|ver (mais|cifra|tablatura)|tutorial|aprenda|simplificar|imprimir|parte \d+ de \d+|dicion[áa]rio|ouvir|ou[çc]a|videoaula|v[íi]deo aula|auto ?rolagem|transpor|meu cifra|baixar|compartilhar|favoritar|chords? by|tabbed by|difficulty|tuning)\b/i;
+const JUNK_RE=/^\s*(composi[çc][ãa]o|letra e m[úu]sica|cifra club|exibir|vers[ãa]o\b|colabora[çc][ãa]o|enviad[ao] por|revis[ãa]o|ver (mais|cifra|tablatura)|tutorial|aprenda|simplificar|imprimir|dicion[áa]rio|ouvir|ou[çc]a|videoaula|v[íi]deo aula|auto ?rolagem|transpor|meu cifra|baixar|compartilhar|favoritar|chords? by|tabbed by|difficulty|tuning)\b/i;
 function parseChordPro(t){
   const r={title:'',artist:'',key:'',bpm:'',notes:''};const out=[];
   for(const line of t.split('\n')){
@@ -1516,18 +1581,34 @@ function itemsToLines(items){
   for(const it of sorted){const r=rows[rows.length-1];if(r&&Math.abs(r.y-it.y)<=Math.max(2,it.fs*0.45))r.items.push(it);else rows.push({y:it.y,fs:it.fs,items:[it]})}
   const gaps=[];for(let i=1;i<rows.length;i++)gaps.push(rows[i-1].y-rows[i].y);
   const lh=median(gaps.filter(g=>g>0))||12;
-  const out=[];
-  rows.forEach((r,i)=>{
-    if(i&&rows[i-1].y-r.y>lh*1.75)out.push('');
-    let line='';
-    for(const it of r.items.sort((a,b)=>a.x-b.x)){
+  rows.forEach(r=>{
+    let line='';r.items.sort((a,b)=>a.x-b.x);
+    for(const it of r.items){
       const col=Math.max(0,Math.round((it.x-minX)/cw));
       if(line.length<col)line+=' '.repeat(col-line.length);
       else if(line.length&&!/\s$/.test(line)&&!/^\s/.test(it.s))line+=' ';
-      line+=it.s;
+      it.c0=line.length;line+=it.s;
     }
-    out.push(line.replace(/\s+$/,''));
+    r.line=line.replace(/\s+$/,'');
+    r.chords=r.items.every(it=>it.s.trim().split(/\s+/).every(t=>isChord(tokInfo(t).core)||/^[|()x\d\-–]+$/i.test(t)));
   });
+  // acorde em cima da letra: posiciona pela posição real da sílaba (fontes de largura variável)
+  rows.forEach((r,i)=>{
+    const nx=rows[i+1];if(!r.chords||!nx||nx.chords||r.y-nx.y>lh*1.4)return;
+    const L=nx.items;const xAt=(x)=>{ // coluna (caractere) da letra na posição x
+      let it=L.find(t=>x>=t.x-0.5&&x<t.x+t.w);
+      if(!it){const last=L[L.length-1];if(x>=last.x+last.w)return nx.line.length+Math.round((x-(last.x+last.w))/cw);it=L.find(t=>t.x>x)||last;return Math.max(0,it.c0-Math.round((it.x-x)/cw))}
+      const per=it.w/Math.max(1,it.s.length);return it.c0+Math.round((x-it.x)/per)};
+    let line='';
+    for(const it of r.items){
+      // cada acorde do trecho (pode haver vários com espaços no mesmo item)
+      const per=it.w/Math.max(1,it.s.length);const re=/\S+/g;let m;
+      while((m=re.exec(it.s))){let col=xAt(it.x+m.index*per);if(col<line.length+(line.length?1:0))col=line.length+(line.length?1:0);line=line.padEnd(col)+m[0]}
+    }
+    r.line=line;
+  });
+  const out=[];
+  rows.forEach((r,i)=>{if(i&&rows[i-1].y-r.y>lh*1.75)out.push('');out.push(r.line)});
   return out;
 }
 // divide um trecho com espaços largos ("G        D" ou duas colunas na mesma linha) em pedaços com posição própria
@@ -1555,8 +1636,14 @@ async function pdfToText(file,onProg){
     if(items.length>=8){
       for(let sx=vw*0.38;sx<=vw*0.62;sx+=2){
         const cross=items.some(i=>i.x<sx&&i.x+i.w>sx+1);if(cross)continue;
-        const L=items.filter(i=>i.x<sx).length,R=items.length-L;
-        if(L>items.length*0.2&&R>items.length*0.2){split=sx;break}
+        const Li=items.filter(i=>i.x<sx),Ri=items.filter(i=>i.x>=sx);
+        if(!(Li.length>items.length*0.2&&Ri.length>items.length*0.2))continue;
+        // segunda coluna de verdade tem LETRA (não só acordes soltos à direita, como "Em D# D C#" no fim da linha)
+        // e ocupa boa parte da altura da página
+        const isText=i=>/[a-zà-ÿ]{3,}/i.test(i.s)&&!i.s.trim().split(/\s+/).every(t=>isChord(tokInfo(t).core));
+        const lyrR=Ri.filter(isText).length,lyrL=Li.filter(isText).length;
+        const ys=Ri.map(i=>i.y),spanR=Math.max(...ys)-Math.min(...ys),ysL=Li.map(i=>i.y),spanL=Math.max(...ysL)-Math.min(...ysL);
+        if(lyrR>=4&&lyrR>=Ri.length*0.3&&lyrL>=4&&spanR>=spanL*0.4){split=sx;break}
       }
     }
     const cols=split?[items.filter(i=>i.x<split),items.filter(i=>i.x>=split)]:[items];
@@ -2498,6 +2585,10 @@ app.addEventListener('click',async ev=>{
     case 'v-jump':{const dr=document.getElementById('drawer');dr.classList.remove('open');const cur=S.viewer.idx;if(i!==cur)goto(i,i>cur?'next':'prev');break}
     case 'v-open-other':{const v=S.viewer;const set=clone(S.sets[v.setId]);const song=S.songs[el.dataset.id];set.items.splice(v.idx+1,0,{songId:song.id,transpose:song.transpose||0});persist(set);v.ids=set.items.map(x=>x.songId);document.getElementById('drawer').classList.remove('open');goto(v.idx+1,'next');toast('Adicionada ao repertório após a atual.');break}
     case 'v-edit':{const v=S.viewer,e=vEntry(v.idx);if(!e||!e.song)break;if(v.ctx==='set'){if(setPerm(S.sets[v.setId],'songs'))openArrangement(v.setId,v.idx,'viewer');else toast('Você não tem permissão para editar as cifras deste repertório.')}else if(canEditSong(e.song))openEditor(e.song,'viewer');break}
+    case 'v-print':{const e=vEntry(S.viewer.idx);if(e&&e.song)printSheets([e],S.viewer.ctx==='set'?S.sets[S.viewer.setId]:null);break}
+    case 'set-print':{const set=S.sets[el.dataset.id];if(!set)break;
+      const list=set.items.map(it=>{const song=S.songs[it.songId];if(!song)return null;return {song,semis:it.transpose||0,content:it.content!=null?it.content:song.content,notes:it.notes!=null?it.notes:(song.notes||'')}}).filter(Boolean);
+      printSheets(list,set);break}
     case 'v-full':try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen()}catch(e){toast('Tela cheia indisponível aqui.')}break;
   }
 });
@@ -2526,6 +2617,7 @@ document.addEventListener('keydown',e=>{
     case 'f':case 'F':document.querySelector('[data-act=v-full]').click();break;
     case 'l':case 'L':document.querySelector('[data-act=v-list]').click();break;
     case 'c':case 'C':document.querySelector('[data-act=v-chords]').click();break;
+    case 'p':case 'P':document.querySelector('[data-act=v-print]')?.click();break;
     case 'Escape':if(dr&&dr.classList.contains('open'))dr.classList.remove('open');else document.querySelector('[data-act=v-back]').click();break;
   }
 });

@@ -80,6 +80,8 @@ textarea{width:100%;min-height:120px;background:var(--panel2);color:var(--text);
 .nx .pc{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--sec);font-weight:700}
 .nx.hit{border-color:var(--ok)}
 .empty2{color:var(--line)!important;font-family:'JetBrains Mono',monospace;font-size:40px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:12px;overflow:hidden}.seg button{border:0;border-radius:0;background:var(--panel2)}.seg button.on{background:var(--accent);color:#1a1300;font-weight:700}
+.mel{display:flex;gap:4px;flex-wrap:wrap;justify-content:center;margin-top:8px}.mel span{font-family:'JetBrains Mono',monospace;font-size:13px;border:1px solid var(--line);border-radius:7px;padding:2px 6px;color:var(--muted)}.mel span:last-child{color:var(--voc,#5fd39a);border-color:#5fd39a}
 .field{display:flex;flex-wrap:wrap;gap:4px;margin-top:10px}
 .field span{font-family:'JetBrains Mono',monospace;font-size:12px;border:1px solid var(--line);border-radius:7px;padding:3px 6px;display:flex;flex-direction:column;align-items:center;min-width:38px}
 .field span i{font-style:normal;color:var(--muted);font-size:9px}
@@ -106,7 +108,7 @@ textarea{width:100%;min-height:120px;background:var(--panel2);color:var(--text);
   </div>
 
   <div class="card big">
-    <div class="lab">Acorde agora <span id="degree" class="deg"></span></div>
+    <div class="lab"><span id="chordLab">Acorde agora</span> <span id="degree" class="deg"></span></div>
     <div id="chord" class="dim">—</div>
     <div id="notes">Toque <b>Ligar microfone</b> e comece a tocar</div>
     <div id="conf"><i></i></div>
@@ -117,14 +119,15 @@ textarea{width:100%;min-height:120px;background:var(--panel2);color:var(--text);
 
   <div class="row">
     <div class="card">
-      <div class="lab">Nota mais forte</div>
+      <div class="lab" id="noteLab">Nota mais forte</div>
       <div class="note" id="note">—</div>
       <div class="hz" id="hz">&nbsp;</div>
       <div class="tuner" id="tuner"><i id="needle"></i></div>
       <div class="cents"><span>−50</span><span id="cents">afinação</span><span>+50</span></div>
+      <div class="hz" id="vocInfo" style="margin-top:8px;display:none"></div>
     </div>
     <div class="card">
-      <div class="lab">Tom e campo harmônico</div>
+      <div class="lab" id="keyLab">Tom e campo harmônico</div>
       <div id="key">—</div>
       <div class="hz" id="keyInfo">ouvindo…</div>
       <div class="field" id="field"></div>
@@ -132,6 +135,9 @@ textarea{width:100%;min-height:120px;background:var(--panel2);color:var(--text);
   </div>
 
   <div class="card" style="display:flex;flex-direction:column;gap:12px">
+    <div class="ctl">
+      <div class="seg" id="modeSeg"><button class="on" data-mode="inst" title="Reconhece os acordes tocados">🎸 Instrumento</button><button data-mode="voz" title="Reconhece a voz cantando: nota, tom da melodia e acordes sugeridos">🗣️ Voz</button></div>
+    </div>
     <div class="ctl">
       <button class="pri" id="btnMic">🎤 Ligar microfone</button>
       <button id="btnAcc" title="Sustenidos ou bemóis">♯ / ♭</button>
@@ -258,7 +264,7 @@ function stop(){
 $('btnMic').onclick=()=>running?stop():start();
 $('btnAcc').onclick=()=>{flats=!flats;$('btnAcc').classList.toggle('on',flats);fillKeySel();renderAll();toast(flats?'Usando bemóis (Bb, Eb…)':'Usando sustenidos (A#, D#…)')};
 $('btn7').onclick=()=>{use7=!use7;$('btn7').classList.toggle('on',use7);TPL=templates();S=null};
-function resetSong(){hist=[];t0=performance.now();keyAcc.fill(0);bassAcc.fill(0);keyFrames=0;current=null;autoKey=null;keyConf=0;preds=[];hits=0;tries=0;S=null;renderAll()}
+function resetSong(){vReset&&vReset();hist=[];t0=performance.now();keyAcc.fill(0);bassAcc.fill(0);keyFrames=0;current=null;autoKey=null;keyConf=0;preds=[];hits=0;tries=0;S=null;renderAll()}
 $('btnClear').onclick=resetSong;
 
 /* ---- modo "Play ao vivo" ---- */
@@ -313,7 +319,8 @@ function tick(){
   const rms=Math.sqrt(e/W),g=gateLevel();
   const toPct=v=>Math.min(100,Math.max(0,(Math.log10(v+1e-6)+4)/3.3*100));
   $('lvl').style.width=toPct(rms)+'%';$('gate').style.left=toPct(g)+'%';
-  if(rms<g){fade();prevRms=rms;return}
+  if(rms<g){if(MODE==='voz'){vSilence++;if(vSilence===4&&vStable)keyAcc[md(vStable.mi)]+=6}fade();prevRms=rms;return}
+  if(MODE==='voz'){voiceTick(rms);prevRms=rms;return}
   const onset=rms>prevRms*1.7&&prevRms>0;prevRms=prevRms*0.6+rms*0.4;
   const mono=pitch(timeBuf.subarray(off),SR);
   an.getFloatFrequencyData(freqBuf);
@@ -396,6 +403,85 @@ function showNote(f,poly){
   $('cents').textContent=(cents>0?'+':'')+cents+' cents';
 }
 
+/* ================= MODO VOZ ================= */
+let MODE='inst',vHist=[],vStable=null,vRun=[],vLo=null,vHi=null,vMel=[],vSilence=0;
+document.getElementById('modeSeg').onclick=e=>{const b=e.target.closest('[data-mode]');if(!b||b.dataset.mode===MODE)return;MODE=b.dataset.mode;
+  document.querySelectorAll('#modeSeg button').forEach(x=>x.classList.toggle('on',x===b));resetSong();vReset();applyModeUI();
+  toast(MODE==='voz'?'Modo voz: cante uma melodia — mostro a nota, o tom e acordes que combinam.':'Modo instrumento: reconhece os acordes tocados.')};
+function vReset(){vHist=[];vStable=null;vRun=[];vLo=null;vHi=null;vMel=[];vSilence=0}
+function applyModeUI(){const v=MODE==='voz';
+  $('chordLab').textContent=v?'Acorde sugerido para a melodia':'Acorde agora';
+  $('noteLab').textContent=v?'Nota cantada':'Nota mais forte';
+  $('keyLab').textContent=v?'Tom da melodia e campo harmônico':'Tom e campo harmônico';
+  $('vocInfo').style.display=v?'block':'none';
+  $('btn7').style.display=v?'none':'';
+  if(!running)$('notes').innerHTML=v?'Toque <b>Ligar microfone</b> e cante uma melodia':'Toque <b>Ligar microfone</b> e comece a tocar'}
+const noteName=mi=>nm(mi)+(Math.floor(mi/12)-1);
+function voicePitch(x,sr){ // YIN para voz (80–1100 Hz), com nível de confiança
+  const W=Math.min(x.length,2048),y=x.subarray(x.length-W),tMax=Math.floor(sr/75),tMin=Math.floor(sr/1100),n=W-tMax;
+  const d=new Float32Array(tMax+1);
+  for(let tau=1;tau<=tMax;tau++){let s=0;for(let i=0;i<n;i++){const v=y[i]-y[i+tau];s+=v*v}d[tau]=s}
+  let run=0;for(let t=1;t<=tMax;t++){run+=d[t];d[t]=d[t]*t/(run||1)}
+  let tau=-1;for(let t=tMin;t<tMax;t++){if(d[t]<0.2){while(t+1<tMax&&d[t+1]<d[t])t++;tau=t;break}}
+  if(tau<1)return null;
+  const a=d[tau-1],b=d[tau],c=d[tau+1]||b,den=a-2*b+c,tt=den?tau+(a-c)/(2*den):tau;
+  return {f:sr/tt,mi:69+12*Math.log2(sr/tt/440),conf:1-b};
+}
+function voiceTick(rms){
+  const p=voicePitch(timeBuf,SR);
+  if(!p||p.conf<0.75){vSilence++;
+    if(vSilence===4&&vStable){vStable.end=true;keyAcc[md(vStable.mi)]+=6} // fim de frase: a última nota pesa mais no tom
+    if(vSilence>2){$('note').classList&&0;$('notes').innerHTML=vMel.length?'Melodia: '+vMel.slice(-8).map(m=>`<span>${nm(m)}</span>`).join(''):'Cante uma melodia…'}
+    return}
+  vSilence=0;
+  // nota estável: as últimas leituras concordam (±0,6 semitom)
+  vRun.push(p.mi);if(vRun.length>5)vRun.shift();
+  const med=[...vRun].sort((a,b)=>a-b)[vRun.length>>1],mi=Math.round(med),cents=Math.round((med-mi)*100);
+  $('note').innerHTML=nm(mi)+`<sub>${Math.floor(mi/12)-1}</sub>`;$('hz').textContent=(440*Math.pow(2,(med-69)/12)).toFixed(1)+' Hz';
+  $('needle').style.left=(50+cents)+'%';$('tuner').classList.toggle('in',Math.abs(cents)<=10);$('cents').textContent=(cents>0?'+':'')+cents+' cents';
+  const agree=vRun.filter(v=>Math.abs(v-med)<0.6).length;
+  if(vRun.length<3||agree<3)return;
+  keyAcc[md(mi)]+=1;keyFrames++;
+  if(vLo===null||mi<vLo)vLo=mi;if(vHi===null||mi>vHi)vHi=mi;
+  if(!vStable||vStable.mi!==mi){vStable={mi,n:1};}else vStable.n++;
+  if(vStable.n===3){ // nota firmou (~0,25 s): entra na melodia
+    if(vMel[vMel.length-1]!==mi)vMel.push(mi);if(vMel.length>40)vMel.shift()}
+  // troca de acorde: nota sustentada (~0,6 s) ou acorde atual já tocou por um tempo (notas de passagem não mudam o acorde)
+  const age=current?(performance.now()-t0)/1000-current.t:9;
+  if((vStable.n===3&&age>=1.6)||vStable.n===8)harmonize(md(mi));
+  $('notes').innerHTML='Melodia: '+vMel.slice(-8).map(m=>`<span>${nm(m)}</span>`).join('');
+  $('vocInfo').innerHTML=vLo!==null&&vHi-vLo>=2?`Extensão: <b>${noteName(vLo)} – ${noteName(vHi)}</b> (${vHi-vLo} semitons)${voiceType(vLo,vHi)}`:'Cante mais notas para medir a extensão.';
+  if(keyFrames%10===0){updateKey();renderKey()}
+}
+function voiceType(lo,hi){ // faixa aproximada pela extensão cantada
+  const T=[['baixo',40,64],['barítono',43,67],['tenor',47,71],['contralto',53,77],['mezzo',57,81],['soprano',60,84]];
+  if(hi-lo<7)return '';let best=null,bs=-1;T.forEach(([n,a,b])=>{const ov=Math.min(hi,b)-Math.max(lo,a);const sc=ov-Math.abs((lo+hi)/2-(a+b)/2)*0.3;if(sc>bs){bs=sc;best=n}});
+  return best?` · faixa de <b>${best}</b> (aproximado)`:''}
+const QTONES={M:[0,4,7],m:[0,3,7],d:[0,3,6]};
+function harmonize(pc){
+  const K=manualKey||autoKey;const recent=vMel.slice(-4).map(md);
+  let cands;
+  if(K&&keyConf>0.2){cands=keyChords(K).filter(c=>!c.b||c.l==='V').map(c=>({...c}))}
+  else{cands=[];for(let r=0;r<12;r++)for(const q of ['M','m'])cands.push({r,q,l:''})}
+  cands=cands.filter(c=>QTONES[c.q].some(x=>md(c.r+x)===pc));if(!cands.length)return;
+  // continua no acorde atual se a nota cabe nele
+  if(current&&QTONES[current.q]&&QTONES[current.q].some(x=>md(current.r+x)===pc)&&(performance.now()-t0)/1000-current.t<4)return;
+  if(!K||keyConf<=0.2){if(vMel.length<4)return} // ainda sem tom: espera algumas notas antes de sugerir
+  const mode=K&&K.m?'m':'M',curLab=K&&current?degreeOf(current,K):'';
+  cands.forEach(c=>{let sc=0;
+    const tr=TRANS[mode][curLab];if(tr&&tr[c.l])sc+=tr[c.l];
+    if(/^(I|i)$/.test(c.l))sc+=0.15;else if(/^(IV|iv|V|v)$/.test(c.l))sc+=0.1;else if(c.l)sc+=0.04;
+    sc+=0.25*recent.filter(n=>QTONES[c.q].some(x=>md(c.r+x)===n)).length/Math.max(1,recent.length);
+    if(c.r===pc)sc+=0.06;if(current&&c.r===current.r&&c.q===current.q)sc-=1;c.sc=sc});
+  cands.sort((a,b)=>b.sc-a.sc);const c=cands[0];
+  const suf=c.q==='m'?'m':c.q==='d'?'°':'';
+  const t=(performance.now()-t0)/1000;const nc={id:c.r+'|'+suf,r:c.r,suf,q:c.q,bass:null,t};
+  if(current&&current.r===nc.r&&current.q===nc.q)return;
+  if(preds.length){tries++;if(preds.some(p=>p.r===nc.r&&p.q===nc.q)){hits++;flashHit(nc)}}
+  current=nc;hist.push({...nc});
+  updatePreds();renderAll();$('chord').classList.remove('dim');
+}
+
 /* ================= TOM ================= */
 function updateKey(){
   if(manualKey){keyConf=1;return}
@@ -404,7 +490,8 @@ function updateKey(){
   for(let r=0;r<12;r++)for(const m of ['','m']){
     const prof=m?KMIN:KMAJ,rot=Array.from({length:12},(_,i)=>prof[md(i-r)]);
     let s=keyFrames>=15?0.6*corr(keyAcc,rot):0;
-    if(hist.length>=3){const k={r,m},kc=keyChords(k);let tot=0,fit=0;
+    if(MODE==='voz')s=keyFrames>=8?corr(keyAcc,rot):0;
+    if(MODE!=='voz'&&hist.length>=3){const k={r,m},kc=keyChords(k);let tot=0,fit=0;
       hist.forEach((h,i)=>{const d=Math.min(8,(i+1<hist.length?hist[i+1].t:(performance.now()-t0)/1000)-h.t);tot+=d;
         const x=kc.find(c=>c.r===h.r&&c.q===h.q);if(x)fit+=d*(x.b?0.4:1)*(h.r===r?1.5:1)});
       s+=fit/Math.max(1,tot)}

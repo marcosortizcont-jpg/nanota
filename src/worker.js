@@ -12,6 +12,17 @@ async function api(req, env, url) {
   const path = url.pathname.replace(/\/+$/, '');
   const m = req.method;
 
+  // Modelo de separação de faixas (HTDemucs, licença MIT): servido pelo próprio site,
+  // para o navegador não esbarrar em bloqueios entre sites. A Cloudflare guarda em cache.
+  if (path === '/api/stem-model' && (m === 'GET' || m === 'HEAD')) {
+    const src = 'https://huggingface.co/timcsy/demucs-web-onnx/resolve/main/htdemucs_embedded.onnx';
+    const r = await fetch(src, { redirect: 'follow', cf: { cacheTtl: 60 * 60 * 24 * 30, cacheEverything: true } });
+    if (!r.ok) return err(502, `Não consegui buscar o modelo (${r.status}).`);
+    const h = new Headers({ 'content-type': 'application/octet-stream', 'cache-control': 'public, max-age=2592000, immutable', 'cross-origin-resource-policy': 'same-origin' });
+    const len = r.headers.get('content-length'); if (len) h.set('content-length', len);
+    return new Response(m === 'HEAD' ? null : r.body, { status: 200, headers: h });
+  }
+
   // Proteção contra envio de formulários de outros sites
   if (m !== 'GET' && req.headers.get('x-nanota') !== '1') return err(403, 'Requisição recusada.');
 

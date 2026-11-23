@@ -141,9 +141,11 @@ const isMobile=/iPhone|iPad|Android|Mobile/i.test(navigator.userAgent);
 /* ================== carregar bibliotecas e modelo ================== */
 function loadScript(src){return new Promise((ok,no)=>{if(window.ort)return ok();const s=document.createElement('script');s.src=src;s.crossOrigin='anonymous';s.onload=ok;s.onerror=()=>no(new Error('Não consegui baixar o motor de IA (verifique a internet).'));document.head.appendChild(s)})}
 async function cachedModel(url,onProg){
-  let cache=null;try{cache=await caches.open('nanota-demucs-v1')}catch(e){}
+  let cache=null;try{cache=await caches.open('nanota-demucs-v2')}catch(e){}
   if(cache){const hit=await cache.match(url);if(hit){onProg(1,1,true);return await hit.arrayBuffer()}}
-  const r=await fetch(url);if(!r.ok)throw new Error('Não consegui baixar o modelo ('+r.status+').');
+  let r;try{r=await fetch(url,{credentials:'same-origin'})}catch(e){throw new Error('Sem conexão para baixar o modelo de IA. Verifique a internet e tente de novo.')}
+  if(r.status===401)throw new Error('Entre na sua conta do NaNota e tente de novo.');
+  if(!r.ok)throw new Error('Não consegui baixar o modelo ('+r.status+').');
   const total=+r.headers.get('content-length')||172e6;const rd=r.body.getReader();const parts=[];let got=0;
   for(;;){const {done,value}=await rd.read();if(done)break;parts.push(value);got+=value.length;onProg(got,total,false)}
   const buf=new Uint8Array(got);let o=0;for(const p of parts){buf.set(p,o);o+=p.length}
@@ -154,20 +156,21 @@ let PROC=null,MODEL_READY=false;
 async function getProcessor(step){
   if(PROC&&MODEL_READY)return PROC;
   step('Baixando o motor de IA…',0.02);
-  await loadScript(ORT_URL);
+  try{await loadScript(ORT_URL)}catch(e){throw new Error('Não consegui carregar o motor de IA (onnxruntime). Verifique a internet.')}
   const ort=window.ort;
   ort.env.wasm.wasmPaths=`https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VER}/dist/`;
   ort.env.wasm.numThreads=self.crossOriginIsolated?Math.min(8,navigator.hardwareConcurrency||4):1;
   try{ort.env.webgpu={...(ort.env.webgpu||{}),powerPreference:'high-performance'}}catch(e){}
-  const mod=await import(DEMUCS_URL);
+  let mod;try{mod=await import(DEMUCS_URL)}catch(e){throw new Error('Não consegui carregar o separador (demucs-web). Verifique a internet.')}
   const {DemucsProcessor,CONSTANTS}=mod;
   PROC=new DemucsProcessor({ort,
     sessionOptions:{executionProviders:('gpu' in navigator)?['webgpu','wasm']:['wasm'],graphOptimizationLevel:'basic',enableCpuMemArena:!isMobile,enableMemPattern:!isMobile},
     onProgress:p=>{const v=typeof p==='number'?p:p.progress;step(null,0.25+0.7*(v||0),p&&p.totalSegments?`trecho ${p.currentSegment} de ${p.totalSegments}`:'')}});
-  const url=CONSTANTS.DEFAULT_MODEL_URL;
+  const url='/api/stem-model'; // mesmo modelo do Hugging Face, entregue pelo próprio NaNota
   const buf=await cachedModel(url,(g,t,hit)=>step(hit?'Modelo já guardado neste aparelho ✓':'Baixando o modelo de IA (só na primeira vez)…',0.03+0.17*g/t,hit?'':`${(g/1e6).toFixed(0)} de ${(t/1e6).toFixed(0)} MB`));
   step('Preparando o modelo…',0.21);
-  await PROC.loadModel(buf);MODEL_READY=true;
+  try{await PROC.loadModel(buf)}catch(e){console.error(e);PROC=null;throw new Error('O modelo baixou, mas não abriu neste navegador'+(('gpu' in navigator)?'':' (sem WebGPU)')+'. Tente o Chrome ou Edge atualizado no computador.')}
+  MODEL_READY=true;
   return PROC;
 }
 
