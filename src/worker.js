@@ -5,6 +5,7 @@
 import { SESSION_DAYS, INVITE_DAYS, PBKDF2_ITER, MIN_PASSWORD, MAX_FAILS, LOCK_MINUTES, COOKIE, enc, now, b64, unb64, b64url, randomToken, sha256, safeEqual, hashPassword, newPasswordFields, json, err, sessionCookie, readCookie, body, cleanEmail, validEmail, publicUser, isStaff, planOut, planOf, currentUser, startSession, createLinkToken, songOut, setOut, str, validId } from './lib.js';
 import { groupRoutes, setsForUser } from './groups.js';
 import { financeRoutes, myBilling } from './finance.js';
+import { transcribeRoutes } from './transcribe.js';
 
 /* ---------- rotas ---------- */
 async function api(req, env, url) {
@@ -114,6 +115,8 @@ async function api(req, env, url) {
 
   if (path === '/api/my/billing' && m === 'GET') return myBilling(env, me);
 
+  const tr = await transcribeRoutes(req, env, path, me);
+  if (tr) return tr;
   const g = await groupRoutes(req, env, url, path, m, me);
   if (g) return g;
   const f = await financeRoutes(req, env, url, path, m, me);

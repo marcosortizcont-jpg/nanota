@@ -718,6 +718,56 @@ async function leaveGroup(setId){
   try{await api('POST',`/api/sets/${setId}/leave`);toast('Você saiu do grupo.');S.view='sets';await bgRefresh();render()}catch(e){toast(e.message)}
 }
 
+/* ---- Transcrição da letra (servidor: Whisper) ---- */
+async function resample16(x,sr){
+  const SR=16000;if(sr===SR)return x;
+  const n=Math.ceil(x.length*SR/sr);
+  try{const AC=window.OfflineAudioContext||window.webkitOfflineAudioContext;
+    const ctx=new AC(1,n,SR);const b=ctx.createBuffer(1,x.length,sr);b.getChannelData(0).set(x);
+    const src=ctx.createBufferSource();src.buffer=b;src.connect(ctx.destination);src.start();
+    const r=await ctx.startRendering();return r.getChannelData(0)}
+  catch(e){const y=new Float32Array(n),k=sr/SR;for(let i=0;i<n;i++){const p=i*k,j=Math.floor(p),f=p-j;y[i]=(x[j]||0)*(1-f)+(x[j+1]||0)*f}return y}
+}
+function cutChunks(y,SR){
+  // pedaços de ~28 s, cortados no ponto mais silencioso entre 22 e 30 s (para não partir palavras)
+  const hop=SR*0.05,out=[];let a=0;const N=y.length;
+  while(a<N){
+    if(N-a<=SR*32){out.push([a,N]);break}
+    let best=a+SR*28,bv=Infinity;
+    for(let p=a+SR*22;p+hop<=a+SR*30;p+=hop){let s=0;for(let i=p;i<p+hop;i++)s+=y[i]*y[i];if(s<bv){bv=s;best=p+hop/2}}
+    best=Math.round(best);out.push([a,best]);a=best}
+  return out.filter(([a,b])=>b-a>SR*0.8);
+}
+function wavB64(seg,SR){
+  let peak=1e-6;for(let i=0;i<seg.length;i++){const v=Math.abs(seg[i]);if(v>peak)peak=v}
+  const g=Math.min(4,0.95/peak); // normaliza o volume
+  const buf=new ArrayBuffer(44+seg.length*2),v=new DataView(buf);
+  const w=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i))};
+  w(0,'RIFF');v.setUint32(4,36+seg.length*2,true);w(8,'WAVE');w(12,'fmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);
+  v.setUint32(24,SR,true);v.setUint32(28,SR*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);w(36,'data');v.setUint32(40,seg.length*2,true);
+  for(let i=0;i<seg.length;i++){const s=Math.max(-1,Math.min(1,seg[i]*g));v.setInt16(44+i*2,s<0?s*0x8000:s*0x7fff,true)}
+  const u=new Uint8Array(buf);let s='';for(let i=0;i<u.length;i+=0x8000)s+=String.fromCharCode.apply(null,u.subarray(i,i+0x8000));
+  return btoa(s);
+}
+async function transcribeAudio(dec,opts){
+  opts=opts||{};const SR=16000;
+  const y=await resample16(dec.x,dec.sr);
+  const chunks=cutChunks(y,SR);if(!chunks.length)return [];
+  const res=new Array(chunks.length);let done=0,next=0,fatal=null;
+  const one=async k=>{const [a,b]=chunks[k];const audio=wavB64(y.subarray(a,b),SR);
+    for(let tr=0;tr<3;tr++){
+      try{const r=await api('POST','/api/transcribe',{audio,lang:opts.lang||'pt',prompt:opts.prompt||''});
+        res[k]=(r.words||[]).map(w=>({...w,s:w.s+a/SR,e:w.e+a/SR}));return}
+      catch(e){if(e.status===401){mapErr(e);throw e}if(e.status&&e.status<500&&e.status!==429)throw e;if(e.status===429)throw e;
+        if(tr===2)throw e;await new Promise(r=>setTimeout(r,1200*(tr+1)))}}};
+  const worker=async()=>{while(next<chunks.length&&!fatal){const k=next++;try{await one(k)}catch(e){fatal=e;return}done++;opts.onProg&&opts.onProg(done/chunks.length)}};
+  await Promise.all([worker(),worker(),worker()]);
+  if(fatal)throw fatal;
+  // junta, sem palavras repetidas na emenda dos pedaços
+  const all=[];res.forEach(ws=>(ws||[]).forEach(w=>{const l=all[all.length-1];if(l&&w.s<l.e-0.05&&w.w.toLowerCase()===l.w.toLowerCase())return;all.push(w)}));
+  return all;
+}
+
 /* ============ Utilidades de UI ============ */
 const app=document.getElementById('app');
 function toast(msg){document.querySelectorAll('.toast').forEach(x=>x.remove());const t=document.createElement('div');t.className='toast';t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),2600)}
@@ -1609,7 +1659,7 @@ function drawImport(tab){
   else if(tab==='audio'){
     body.innerHTML=`<label class="drop" id="audDrop"><input type="file" id="audFile" accept="audio/*,.mp3,.m4a,.wav,.ogg,.flac,.aac,.webm" hidden>
       <div style="font-size:28px">♪</div><div><b>Escolha um arquivo de áudio da música</b></div><div class="hint">MP3, M4A, WAV, OGG… (até 8 minutos são analisados)</div></label>
-      <div class="info">A análise roda aqui mesmo no seu aparelho e gera a cifra da música inteira: tom, andamento, compassos, acordes (com 7ª, 7M, sus e diminutos), inversões pelo baixo (ex.: D/F#), as partes (intro, primeira parte, refrão, ponte, final) e as paradas como convenção. A letra não é transcrita. <b>Confira de ouvido</b> antes de usar no palco.</div>
+      <div class="info">A análise roda aqui mesmo no seu aparelho e gera a cifra da música inteira: tom, andamento, compassos, acordes (com 7ª, 7M, sus e diminutos), inversões pelo baixo (ex.: D/F#), as partes (intro, primeira parte, refrão, ponte, final) e as paradas como convenção.${typeof transcribeAudio==='function'?' Em seguida a <b>letra é transcrita por IA</b> e cada acorde é posto em cima da palavra cantada.':' A transcrição da letra funciona no site do NaNota.'} <b>Confira de ouvido</b> antes de usar no palco.</div>
       <details class="box2" id="audChartBox" ${IMP.chart?'open':''}><summary><b>Tem a cifra com letra?</b> Junte para ter a música completa (opcional)</summary>
         <p class="hint" style="margin:6px 0">Anexe o PDF (ex.: do Cifra Club) ou cole o texto. A letra e os acordes vêm da cifra; a gravação define o tom real, o andamento e o roteiro das partes desta versão.</p>
         <div class="chips"><label class="btn sm"><input type="file" id="audChart" accept=".pdf,.txt,.cho,.chordpro,application/pdf,text/plain" hidden>📄 Anexar PDF ou texto</label><span class="hint" id="audChartName">${IMP.chart?esc(IMP.chart.name):''}</span></div>
@@ -1965,47 +2015,147 @@ function combineChart(res,text){
   return {title:c.title,artist:c.artist,key,bpm:String(res.bpm),notes,semis,chartKey:ck,
     content:`@Roteiro da gravação: ${roteiro}\n\n${content}`};
 }
+/* letra transcrita (palavras com tempo) + acordes do áudio → cifra no formato Cifra Club */
+function lyricChart(res,words){
+  const W=(words||[]).map(w=>({...w,w:String(w.w||'').replace(/^[-–—"“”']+|["“”]+$/g,'').trim()})).filter(w=>w.w&&w.e>=w.s).sort((a,b)=>a.s-b.s);
+  if(!W.length)return null;
+  const spb=60/Math.max(30,res.bpm||90),gapMin=Math.max(3,8*spb),dur=res.duration||(W[W.length-1].e+5);
+  // trocas de acorde no tempo
+  const ch=[];let last=null;
+  res.beats.forEach((t,b)=>{const c=res.beatChord[b];if(!c||c==='N')return;if(c!==last){ch.push({t,c});last=c}});
+  const chordAt=t=>{let c=null;for(const x of ch){if(x.t<=t+0.05)c=x.c;else break}return c};
+  const secs=(res.sections&&res.sections.length?res.sections:[{name:'Música',t:0}]).map((s,i,a)=>({name:s.name,t0:i?s.t:0,t1:i+1<a.length?a[i+1].t:dur}));
+  const secOf=t=>{let k=0;secs.forEach((s,i)=>{if(s.t0<=t+0.3)k=i});return k};
+  // frases (linhas da letra)
+  const lines=[];let cur=null;
+  W.forEach((w,i)=>{const p=W[i-1];
+    const len=cur?cur.words.reduce((a,x)=>a+x.w.length+1,0):0;
+    const brk=!cur||w.s-p.e>0.6||/[.!?…]$/.test(p.w)||(p.seg&&len>=14)||len+w.w.length>46||(/[,;]$/.test(p.w)&&len>=28)||secOf(w.s)!==cur.sec;
+    if(brk){cur={words:[],sec:secOf(w.s)};lines.push(cur)}
+    cur.words.push(w)});
+  lines.forEach(L=>{L.s=L.words[0].s;L.e=L.words[L.words.length-1].e});
+  // ajuda: monta uma linha de acordes posicionados
+  const place=items=>{let s='';items.forEach(({pos,c})=>{const p=Math.max(pos,s.length?s.length+1:0);s=s.padEnd(p)+c});return s};
+  const pad=toks=>toks.map(t=>t.padEnd(Math.max(4,t.length+2))).join('').trimEnd();
+  const barT=res.bars&&res.bars.length?res.bars.map(b=>b.t):res.beats.filter((_,i)=>i%4===0);
+  const rowsOf=(a,z)=>{ // trecho só instrumental: 4 compassos por linha, alinhado ao compasso
+    if(z-a<0.5)return [];
+    const st=barT.filter(t=>t>=a-0.3&&t<z-0.5);
+    if(!st.length||st[0]-a>2*spb)st.unshift(a);
+    const rows=[];let lastTok=null;
+    for(let i=0;i<st.length;i+=4){const t0=st[i],t1=i+4<st.length?st[i+4]:z;
+      const toks=[];const c0=chordAt(t0+0.05);if(c0)toks.push(c0);
+      ch.forEach(x=>{if(x.t>t0+0.05&&x.t<t1-0.05&&x.c!==toks[toks.length-1])toks.push(x.c)});
+      if(!toks.length)continue;
+      if(t1-t0<4*spb*0.9&&toks.length===1&&toks[0]===lastTok)continue; // sobra de menos de 1 compasso
+      lastTok=toks[toks.length-1];rows.push(pad(toks))}
+    const out=[];for(let i=0;i<rows.length;){let k=1;while(i+k<rows.length&&rows[i+k]===rows[i])k++;out.push(rows[i]+(k>1?`  (${k}x)`:''));i+=k}
+    return out};
+  const brkIn=(a,z)=>(res.breaks||[]).filter(t=>t>=a&&t<z);
+  const cap=s=>s.charAt(0).toUpperCase()+s.slice(1);
+  const out=[];
+  secs.forEach((sec,si)=>{
+    const Ls=lines.filter(L=>L.sec===si);
+    const body=[];let cursor=sec.t0;
+    if(!Ls.length){
+      const r=rowsOf(sec.t0,sec.t1);if(!r.length)return;
+      if(r.length===1&&/Intro|Final|Ponte|Solo/.test(sec.name)){out.push(`[${sec.name}] `+r[0],'');return}
+      out.push(`[${sec.name}]`,...r);brkIn(sec.t0,sec.t1).forEach(t=>out.push(`@Convenção: parada em ${fmtT(t)}`));out.push('');return}
+    Ls.forEach((L,li)=>{
+      const next=li+1<Ls.length?Ls[li+1].s:sec.t1;
+      if(L.s-cursor>=gapMin)body.push(...rowsOf(cursor,L.s-0.3));
+      const winA=L.s-0.35,winZ=(next-L.e>=gapMin?L.e+spb:next)-0.35;
+      // texto da letra e onde cada palavra começa
+      const parts=L.words.map((w,i)=>i===0?cap(w.w):w.w);let text='';const st=[];
+      parts.forEach((p,i)=>{if(i)text+=' ';st.push(text.length);text+=p});
+      text=text.replace(/[,;.]+$/,'');
+      const items=[];
+      const c0=chordAt(L.s+0.05);
+      ch.filter(x=>x.t>=winA&&x.t<winZ).forEach(x=>{
+        let k=-1;L.words.forEach((w,i)=>{if(w.s<=x.t+0.15)k=i});
+        let pos;if(k<0)pos=0;else if(x.t>L.e+0.25)pos=text.length+2;else pos=st[k];
+        if(items.length&&items[items.length-1].c===x.c)return;
+        items.push({pos,c:x.c})});
+      if(c0&&!(items.length&&items[0].pos===0))items.unshift({pos:0,c:c0});
+      const cl=place(items);
+      if(cl.trim())body.push(cl);
+      body.push(text);
+      brkIn(cursor,winZ+0.35).forEach(t=>body.push(`@Convenção: parada em ${fmtT(t)}`));
+      cursor=winZ+0.35});
+    if(sec.t1-cursor>=gapMin)body.push(...rowsOf(cursor,sec.t1));
+    out.push(`[${sec.name}]`,...body,'')});
+  return out.join('\n').replace(/\n{3,}/g,'\n\n').replace(/\s+$/,'');
+}
 async function runAudio(file,tempo){
   const out=document.getElementById('audOut');if(!out)return;stopAudio();
   out.innerHTML=`<div class="hint" style="margin-bottom:6px" id="audStep">Abrindo “${esc(file.name)}”…</div><div class="bar"><i id="audBar"></i></div>`;
   let res,dec;
   try{
     dec=AUD_CACHE&&AUD_CACHE.file===file?AUD_CACHE.dec:await decodeAudio(file);
-    AUD_CACHE={file,dec};
+    if(!(AUD_CACHE&&AUD_CACHE.file===file))AUD_CACHE={file,dec};
     res=await auAnalyze(dec.x,dec.sr,(p,t)=>{const b=document.getElementById('audBar');if(b)b.style.width=Math.round(p*100)+'%';const st=document.getElementById('audStep');if(st&&t)st.textContent=t},{tempo});
   }catch(e){out.innerHTML=`<div class="info warn">Não consegui analisar esse arquivo. Tente MP3, M4A ou WAV.</div>`;return}
   if(!document.getElementById('audOut'))return;
   if(!res.segs.length){out.innerHTML='<div class="info warn">Não encontrei acordes nesse áudio.</div>';return}
-  AUD={audio:null,url:URL.createObjectURL(file),res,file,dec,mode:null};
+  AUD={audio:null,url:URL.createObjectURL(file),res,file,dec,mode:null,lyr:AUD_CACHE.running?{status:'run',p:AUD_CACHE.p}:(AUD_CACHE.lyr||null),lang:AUD_CACHE.lang||'pt'};
   drawAudioResult();
+  if(!AUD.lyr&&typeof transcribeAudio==='function')startTranscribe(AUD.lang);
+}
+async function startTranscribe(lang){
+  if(!AUD||!AUD_CACHE||AUD_CACHE.file!==AUD.file)return;
+  const C=AUD_CACHE,file=C.file,dec=C.dec;
+  if(C.running)return;
+  C.lang=lang||C.lang||'pt';C.running=true;C.p=0;C.lyr=null;
+  const sync=()=>{if(AUD&&AUD.file===file){AUD.lang=C.lang;AUD.lyr=C.running?{status:'run',p:C.p}:C.lyr;AUD.mode=null;if(document.getElementById('audOut'))drawAudioResult()}};
+  sync();
+  try{
+    const words=await transcribeAudio(dec,{lang:C.lang,prompt:'Letra de música cantada.',onProg:p=>{C.p=p;const b=document.getElementById('lyrBar');if(b&&AUD&&AUD.file===file)b.style.width=Math.round(p*100)+'%'}});
+    C.lyr=words.length?{status:'done',words}:{status:'err',msg:'Não encontrei voz cantada nesse áudio.'};
+  }catch(e){C.lyr={status:'err',msg:e.message||'Não consegui transcrever a letra.'}}
+  C.running=false;
+  if(C.lyr.status==='err')C.lyrErr=C.lyr;
+  sync();
 }
 let AUD_CACHE=null;
 function drawAudioResult(){
   const out=document.getElementById('audOut');if(!out||!AUD)return;
   const {res,file,dec}=AUD;
   const comb=IMP.chart?combineChart(res,IMP.chart.text):null;
-  if(!AUD.mode)AUD.mode=comb?'comb':'audio';if(!comb)AUD.mode='audio';
-  const view=AUD.mode==='comb'?comb:null;
-  const t=AUD.audio?AUD.audio.currentTime:0;
+  const L=AUD.lyr||{},canTr=typeof transcribeAudio==='function';
+  const lyrC=L.status==='done'?lyricChart(res,L.words):null;
+  if(!AUD.mode||(AUD.mode==='comb'&&!comb)||(AUD.mode==='letra'&&!lyrC))AUD.mode=comb?'comb':lyrC?'letra':'audio';
+  const view=AUD.mode==='comb'?comb:AUD.mode==='letra'?{content:lyrC}:null;
+  const LANGS=[['pt','Português'],['en','Inglês'],['es','Espanhol'],['it','Italiano'],['fr','Francês']];
+  const langSel=`<select class="sm-sel" id="lyrLang" title="Idioma da letra">${LANGS.map(([k,n])=>`<option value="${k}" ${AUD.lang===k?'selected':''}>${n}</option>`).join('')}</select>`;
+  const lyrBox=!canTr?`<div class="info">🎤 A <b>transcrição da letra</b> funciona no site do NaNota (com login). Aqui você pode anexar a cifra com letra no campo acima.</div>`
+    :L.status==='run'?`<div class="box2"><div class="hint" style="margin-bottom:6px">🎤 Transcrevendo a letra com IA… os acordes já estão prontos abaixo.</div><div class="bar"><i id="lyrBar" style="width:${Math.round((L.p||0)*100)}%"></i></div></div>`
+    :L.status==='err'?`<div class="info warn">🎤 ${esc(L.msg)} <span class="chips" style="display:inline-flex">${langSel}<button class="btn sm" data-lyr="go">Tentar de novo</button></span></div>`
+    :L.status==='done'?`<div class="chips"><span class="chip">🎤 Letra: <b>${L.words.length} palavras</b></span>${langSel}<button class="btn sm" data-lyr="go" title="Transcrever de novo no idioma escolhido">↻ Transcrever de novo</button></div>`
+    :`<div class="chips">${langSel}<button class="btn sm primary" data-lyr="go">🎤 Transcrever a letra</button></div>`;
+  const t=AUD.audio?AUD.audio.currentTime:0,wasPlaying=!!(AUD.audio&&!AUD.audio.paused);
   out.innerHTML=`<audio controls src="${AUD.url}" id="audEl"></audio>
     <div class="chips"><span class="chip">Tom da gravação: <b>${esc(res.key)}</b></span><span class="chip">Andamento: <b>${res.bpm} BPM</b></span>
       <button class="btn sm" data-tempo="half" title="Use se a música for lenta e o andamento parecer o dobro">½ andamento</button><button class="btn sm" data-tempo="double" title="Use se o andamento parecer a metade">2× andamento</button>
       <span class="chip">${res.sections.length} partes</span>${Math.abs(res.tuning)>=10?`<span class="chip">Afinação: <b>${res.tuning>0?'+':''}${res.tuning} cents</b></span>`:''}${res.breaks.length?`<span class="chip">${res.breaks.length} parada(s)</span>`:''}${dec.cut?'<span class="chip">Analisados os primeiros 10 min</span>':''}</div>
-    ${comb?`<div class="chips"><button class="btn sm ${AUD.mode==='comb'?'primary':''}" data-mode="comb">📄+🎧 Cifra com letra + gravação</button><button class="btn sm ${AUD.mode==='audio'?'primary':''}" data-mode="audio">🎧 Só a cifra gerada do áudio</button></div>
+    ${lyrBox}
+    ${comb||lyrC?`<div class="chips">${lyrC?`<button class="btn sm ${AUD.mode==='letra'?'primary':''}" data-mode="letra">🎤+🎧 Letra transcrita + acordes</button>`:''}${comb?`<button class="btn sm ${AUD.mode==='comb'?'primary':''}" data-mode="comb">📄+🎧 Cifra anexada + gravação</button>`:''}<button class="btn sm ${AUD.mode==='audio'?'primary':''}" data-mode="audio">🎧 Só os acordes</button></div>`:''}
+    ${comb&&AUD.mode==='comb'?`
       <div class="info">${comb.semis?`A cifra está em <b>${esc(comb.chartKey)}</b> e a gravação em <b>${esc(res.key)}</b> — transpus a cifra <b>${comb.semis>0?'+':''}${comb.semis}</b>.`:`A cifra (${esc(comb.chartKey||'—')}) está no mesmo tom da gravação.`} O roteiro mostra a ordem das partes nesta versão.</div>`:''}
+    ${AUD.mode==='letra'?'<div class="info">Cada acorde está em cima da palavra cantada no momento em que ele soa. Confira a letra: a IA pode errar palavras quando a voz está baixa ou embolada com os instrumentos.</div>':''}
     <div class="ptitle">Partes — toque para ouvir</div>
     <div class="chips" id="audSec">${res.sections.map(s=>`<button class="btn sm" data-t="${s.t}">${esc(s.name)} · ${fmtT(s.t)}</button>`).join('')}</div>
-    <div class="ptitle">${view?'Cifra final (letra da cifra + dados da gravação)':'Cifra gerada do áudio'}</div>
+    <div class="ptitle">${AUD.mode==='comb'?'Cifra final (letra da cifra + dados da gravação)':AUD.mode==='letra'?'Cifra completa: letra transcrita + acordes da gravação':'Cifra gerada do áudio'}</div>
     <div class="sheet" style="padding:10px 12px;font-size:14px;max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:10px">${renderSheet(view?view.content:res.content,0,false,true)}</div>
     <div class="ptitle">Acordes no tempo — o atual acende enquanto toca</div>
     <div class="tl" id="audTl">${res.segs.map((g,i)=>`<button data-k="${i}" data-t="${g.t0}"><b>${esc(g.c)}</b><small>${fmtT(g.t0)}</small></button>`).join('')}</div>
-    <p class="hint">${comb?'':'<b>A letra não pode ser tirada do áudio.</b> Para ter a música completa, anexe acima a cifra com letra (PDF ou texto). '}Confira de ouvido: gravações ao vivo com teclado sustentando notas, muitos efeitos ou mixagem densa podem trocar acordes parecidos.</p>`;
-  const audio=out.querySelector('#audEl');AUD.audio=audio;if(t)audio.currentTime=t;
+    <p class="hint">Confira de ouvido: gravações ao vivo com teclado sustentando notas, muitos efeitos ou mixagem densa podem trocar acordes parecidos.</p>`;
+  const audio=out.querySelector('#audEl');if(AUD.audio&&AUD.audio!==audio)AUD.audio.pause();AUD.audio=audio;if(t)audio.currentTime=t;if(wasPlaying)audio.play().catch(()=>{});
   const btns=[...out.querySelectorAll('#audTl button')];let cur=-1;
   audio.addEventListener('timeupdate',()=>{const tt=audio.currentTime;let k=res.segs.findIndex(g=>tt>=g.t0&&tt<g.t1);
     if(k!==cur){if(cur>=0&&btns[cur])btns[cur].classList.remove('cur');cur=k;if(k>=0){btns[k].classList.add('cur');btns[k].scrollIntoView({block:'nearest'})}}});
   out.onclick=e=>{
     const md=e.target.closest('[data-mode]');if(md){AUD.mode=md.dataset.mode;drawAudioResult();return}
+    const ly=e.target.closest('[data-lyr]');if(ly){const sel=out.querySelector('#lyrLang');startTranscribe(sel?sel.value:'pt');return}
     const tp=e.target.closest('[data-tempo]');if(tp){runAudio(file,tp.dataset.tempo);return}
     const b=e.target.closest('[data-t]');if(!b)return;audio.currentTime=+b.dataset.t;audio.play().catch(()=>{})};
   const foot=document.getElementById('impFoot');
@@ -2016,6 +2166,7 @@ function drawAudioResult(){
     const extra={};if(L){extra.links={};extra.links[L.kind==='yt'?'youtube':/spotify/i.test(L.site)?'spotify':'deezer']=L.url}
     const base={title:titleCase(file.name.replace(/\.[^.]+$/,'').replace(/[-_]+/g,' ')),key:res.key,bpm:String(res.bpm),
       notes:`Cifra gerada do áudio (${res.bpm} BPM${Math.abs(res.tuning)>=10?`, afinação ${res.tuning>0?'+':''}${res.tuning} cents`:''}) — confira de ouvido e escreva a letra.`,content:res.content};
+    if(AUD.mode==='letra')base.notes=`Letra transcrita por IA e acordes tirados do áudio (${res.bpm} BPM) — confira de ouvido.`;
     const r=view?{...base,...view,title:view.title||base.title}:base;
     stopAudio();IMP.m.close();startImported(r,extra);
   };
