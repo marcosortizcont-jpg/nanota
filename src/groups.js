@@ -115,6 +115,7 @@ function cleanItems(raw) {
       const o = { songId: String(it.songId), transpose: Math.max(-11, Math.min(11, parseInt(it.transpose) || 0)) };
       if (typeof it.content === 'string') o.content = it.content.slice(0, 100000);
       if (typeof it.notes === 'string') o.notes = it.notes.slice(0, 1000);
+      if (typeof it.key === 'string' && /^[A-G][#b]?m?$/.test(it.key)) o.key = it.key;
       return o;
     });
 }
