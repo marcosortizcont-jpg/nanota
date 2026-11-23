@@ -45,7 +45,17 @@ function readCookie(req, name) {
 async function body(req) { try { return await req.json(); } catch { return {}; } }
 const cleanEmail = e => String(e || '').trim().toLowerCase();
 const validEmail = e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) && e.length <= 200;
-const publicUser = u => ({ id: u.id, email: u.email, name: u.name, role: u.role, status: u.status, mustChangePassword: !!u.must_change_password });
+const publicUser = u => ({ id: u.id, email: u.email, name: u.name, role: u.role, status: u.status, isMaster: !!u.is_master,
+  planId: u.plan_id || 'gratuito', mustChangePassword: !!u.must_change_password });
+const isStaff = u => u.role === 'admin' || !!u.is_master;
+function planOut(p) {
+  let features = []; try { features = JSON.parse(p.features); } catch {}
+  return { id: p.id, name: p.name, description: p.description, priceCents: p.price_cents, currency: p.currency, interval: p.billing_interval,
+    maxSongs: p.max_songs, maxSetlists: p.max_setlists, features, active: !!p.active, isDefault: !!p.is_default, sort: p.sort };
+}
+async function planOf(env, u) {
+  return await env.DB.prepare('SELECT * FROM plans WHERE id = ?').bind(u.plan_id || 'gratuito').first();
+}
 
 async function currentUser(req, env) {
   const tok = readCookie(req, COOKIE);
@@ -73,9 +83,9 @@ async function createLinkToken(env, userId, purpose) {
 }
 
 /* ---------- conversão entre o banco e o formato do app ---------- */
-function songOut(r) {
+function songOut(r, me) {
   let tags = []; try { tags = JSON.parse(r.tags); } catch {}
-  return { id: r.id, type: 'song', title: r.title, artist: r.artist, key: r.song_key, bpm: r.bpm, tags, notes: r.notes, link: r.link, content: r.content, transpose: r.transpose, updated: r.updated_at * 1000 };
+  return { id: r.id, type: 'song', title: r.title, artist: r.artist, key: r.song_key, bpm: r.bpm, tags, notes: r.notes, link: r.link, content: r.content, transpose: r.transpose, catalog: !!r.is_public, mine: !!me && r.user_id === me.id, updated: r.updated_at * 1000 };
 }
 function setOut(r) {
   let items = []; try { items = JSON.parse(r.items); } catch {}
@@ -148,7 +158,10 @@ async function api(req, env, url) {
   const me = await currentUser(req, env);
   if (!me) return err(401, 'Faça login.');
 
-  if (path === '/api/me' && m === 'GET') return json({ user: publicUser(me) });
+  if (path === '/api/me' && m === 'GET') {
+    const p = await planOf(env, me);
+    return json({ user: publicUser(me), plan: p ? planOut(p) : null });
+  }
 
   if (path === '/api/logout' && m === 'POST') {
     const tok = readCookie(req, COOKIE);
@@ -175,34 +188,48 @@ async function api(req, env, url) {
   if (me.must_change_password) return err(403, 'Troque sua senha temporária para continuar.');
 
   /* ----- dados do usuário ----- */
+  const staff = isStaff(me);
+
   if (path === '/api/data' && m === 'GET') {
     const [songs, sets] = await env.DB.batch([
-      env.DB.prepare('SELECT * FROM songs WHERE user_id = ? AND deleted = 0').bind(me.id),
+      env.DB.prepare('SELECT * FROM songs WHERE (user_id = ? OR is_public = 1) AND deleted = 0').bind(me.id),
       env.DB.prepare('SELECT * FROM setlists WHERE user_id = ? AND deleted = 0').bind(me.id),
     ]);
-    return json({ songs: songs.results.map(songOut), sets: sets.results.map(setOut) });
+    return json({ songs: songs.results.map(r => songOut(r, me)), sets: sets.results.map(setOut) });
   }
 
   let mm = path.match(/^\/api\/songs\/([^/]+)$/);
   if (mm) {
     const id = mm[1];
     if (!validId(id)) return err(400, 'Identificador inválido.');
-    const owner = await env.DB.prepare('SELECT user_id FROM songs WHERE id = ?').bind(id).first();
-    if (owner && owner.user_id !== me.id) return err(404, 'Não encontrada.');
-    if (m === 'DELETE') { await env.DB.prepare('DELETE FROM songs WHERE id = ? AND user_id = ?').bind(id, me.id).run(); return json({ ok: true }); }
+    const ex = await env.DB.prepare('SELECT user_id, is_public FROM songs WHERE id = ?').bind(id).first();
+    const mayEdit = ex && (ex.user_id === me.id || (ex.is_public && staff));
+    if (ex && !mayEdit) return err(ex.is_public ? 403 : 404, ex.is_public ? 'Só o administrador pode alterar uma cifra padrão. Personalize-a dentro do seu repertório.' : 'Não encontrada.');
+    if (m === 'DELETE') {
+      if (ex) await env.DB.prepare('DELETE FROM songs WHERE id = ?').bind(id).run();
+      return json({ ok: true });
+    }
     if (m === 'PUT') {
       const s = await body(req);
       if (String(s.content || '').length > 200000) return err(413, 'Cifra muito grande.');
+      if (!ex && !staff) {
+        const lim = await planOf(env, me);
+        if (lim && lim.max_songs != null) {
+          const c = await env.DB.prepare('SELECT COUNT(*) AS n FROM songs WHERE user_id = ? AND is_public = 0').bind(me.id).first();
+          if (c.n >= lim.max_songs) return err(402, `Seu plano (${lim.name}) permite até ${lim.max_songs} músicas próprias.`);
+        }
+      }
+      const pub = staff ? (s.catalog ? 1 : 0) : (ex ? ex.is_public : 0);
       const tags = JSON.stringify((Array.isArray(s.tags) ? s.tags : []).map(t => str(t, 40)).slice(0, 30));
-      await env.DB.prepare(
-        `INSERT INTO songs (id, user_id, title, artist, song_key, bpm, tags, notes, link, content, transpose, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET title = excluded.title, artist = excluded.artist, song_key = excluded.song_key,
-           bpm = excluded.bpm, tags = excluded.tags, notes = excluded.notes, link = excluded.link, content = excluded.content,
-           transpose = excluded.transpose, updated_at = excluded.updated_at, deleted = 0
-         WHERE songs.user_id = excluded.user_id`
-      ).bind(id, me.id, str(s.title, 200), str(s.artist, 200), str(s.key, 12), str(s.bpm, 10), tags, str(s.notes, 1000),
-        str(s.link, 500), String(s.content || ''), Math.max(-11, Math.min(11, parseInt(s.transpose) || 0)), now()).run();
+      const vals = [str(s.title, 200), str(s.artist, 200), str(s.key, 12), str(s.bpm, 10), tags, str(s.notes, 1000),
+        str(s.link, 500), String(s.content || ''), Math.max(-11, Math.min(11, parseInt(s.transpose) || 0)), pub, now()];
+      if (ex) {
+        await env.DB.prepare(`UPDATE songs SET title = ?, artist = ?, song_key = ?, bpm = ?, tags = ?, notes = ?, link = ?, content = ?,
+          transpose = ?, is_public = ?, updated_at = ?, deleted = 0 WHERE id = ?`).bind(...vals, id).run();
+      } else {
+        await env.DB.prepare(`INSERT INTO songs (title, artist, song_key, bpm, tags, notes, link, content, transpose, is_public, updated_at, id, user_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(...vals, id, me.id).run();
+      }
       return json({ ok: true });
     }
   }
@@ -216,41 +243,67 @@ async function api(req, env, url) {
     if (m === 'DELETE') { await env.DB.prepare('DELETE FROM setlists WHERE id = ? AND user_id = ?').bind(id, me.id).run(); return json({ ok: true }); }
     if (m === 'PUT') {
       const s = await body(req);
+      if (!owner && !staff) {
+        const lim = await planOf(env, me);
+        if (lim && lim.max_setlists != null) {
+          const c = await env.DB.prepare('SELECT COUNT(*) AS n FROM setlists WHERE user_id = ?').bind(me.id).first();
+          if (c.n >= lim.max_setlists) return err(402, `Seu plano (${lim.name}) permite até ${lim.max_setlists} repertórios.`);
+        }
+      }
       const items = (Array.isArray(s.items) ? s.items : []).slice(0, 300)
         .filter(it => it && validId(String(it.songId)))
-        .map(it => ({ songId: String(it.songId), transpose: Math.max(-11, Math.min(11, parseInt(it.transpose) || 0)) }));
+        .map(it => {
+          const o = { songId: String(it.songId), transpose: Math.max(-11, Math.min(11, parseInt(it.transpose) || 0)) };
+          if (typeof it.content === 'string') o.content = it.content.slice(0, 100000);
+          if (typeof it.notes === 'string') o.notes = it.notes.slice(0, 1000);
+          return o;
+        });
+      const itemsJson = JSON.stringify(items);
+      if (itemsJson.length > 1500000) return err(413, 'Repertório muito grande.');
       await env.DB.prepare(
         `INSERT INTO setlists (id, user_id, name, set_date, items, updated_at) VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET name = excluded.name, set_date = excluded.set_date, items = excluded.items,
            updated_at = excluded.updated_at, deleted = 0
          WHERE setlists.user_id = excluded.user_id`
-      ).bind(id, me.id, str(s.name, 200), str(s.date, 10), JSON.stringify(items), now()).run();
+      ).bind(id, me.id, str(s.name, 200), str(s.date, 10), itemsJson, now()).run();
       return json({ ok: true });
     }
   }
 
-  /* ----- administração de usuários ----- */
+  if (path === '/api/plans' && m === 'GET') {
+    const r = await env.DB.prepare('SELECT * FROM plans WHERE active = 1 ORDER BY sort, price_cents').all();
+    return json({ plans: r.results.map(planOut) });
+  }
+
+  /* ----- administração (admin e master) ----- */
   if (path.startsWith('/api/admin/')) {
-    if (me.role !== 'admin') return err(403, 'Apenas administradores.');
+    if (!staff) return err(403, 'Apenas administradores.');
+    const master = !!me.is_master;
+    const needMaster = () => err(403, 'Apenas o usuário master pode fazer isso.');
 
     if (path === '/api/admin/users' && m === 'GET') {
       const r = await env.DB.prepare(
-        `SELECT u.id, u.email, u.name, u.role, u.status, u.created_at, u.last_login_at,
-           (SELECT COUNT(*) FROM songs s WHERE s.user_id = u.id) AS songs
-         FROM users u ORDER BY u.role = 'admin' DESC, u.name COLLATE NOCASE`
+        `SELECT u.id, u.email, u.name, u.role, u.status, u.is_master, u.plan_id, u.plan_expires_at, u.created_at, u.last_login_at,
+           (SELECT COUNT(*) FROM songs s WHERE s.user_id = u.id AND s.is_public = 0) AS songs,
+           (SELECT COUNT(*) FROM setlists t WHERE t.user_id = u.id) AS sets
+         FROM users u ORDER BY u.is_master DESC, u.role = 'admin' DESC, u.name COLLATE NOCASE`
       ).all();
       return json({ users: r.results });
     }
 
     if (path === '/api/admin/users' && m === 'POST') {
-      const { email, name, role } = await body(req);
+      const { email, name, role, plan_id } = await body(req);
       const e = cleanEmail(email);
       if (!validEmail(e)) return err(400, 'E-mail inválido.');
+      if (role === 'admin' && !master) return needMaster();
       const exists = await env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(e).first();
       if (exists) return err(409, 'Já existe um usuário com esse e-mail.');
+      let plan = null;
+      if (plan_id && master) plan = await env.DB.prepare('SELECT id FROM plans WHERE id = ?').bind(String(plan_id)).first();
+      if (!plan) plan = await env.DB.prepare('SELECT id FROM plans WHERE is_default = 1 ORDER BY sort LIMIT 1').first();
       const id = crypto.randomUUID();
-      await env.DB.prepare(`INSERT INTO users (id, email, name, role, status) VALUES (?, ?, ?, ?, 'invited')`)
-        .bind(id, e, str(name, 80).trim(), role === 'admin' ? 'admin' : 'member').run();
+      await env.DB.prepare(`INSERT INTO users (id, email, name, role, status, plan_id) VALUES (?, ?, ?, ?, 'invited', ?)`)
+        .bind(id, e, str(name, 80).trim(), role === 'admin' ? 'admin' : 'member', plan ? plan.id : 'gratuito').run();
       const tok = await createLinkToken(env, id, 'invite');
       return json({ id, link: `${url.origin}/?convite=${tok}`, expiresDays: INVITE_DAYS });
     }
@@ -260,7 +313,27 @@ async function api(req, env, url) {
       const [, id, action] = mm;
       const u = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
       if (!u) return err(404, 'Usuário não encontrado.');
+      const targetStaff = u.role === 'admin' || u.is_master;
+      if (u.is_master && (action === 'disable' || m === 'DELETE' || m === 'PATCH' && id !== me.id)) return err(400, 'O usuário master não pode ser bloqueado, excluído ou alterado por outra conta.');
       if (id === me.id && (action === 'disable' || m === 'DELETE')) return err(400, 'Você não pode bloquear ou excluir a própria conta.');
+      if (targetStaff && !master && id !== me.id) return needMaster();
+
+      if (!action && m === 'PATCH') {
+        if (!master) return needMaster();
+        const b = await body(req);
+        const sets = [], vals = [];
+        if (b.role !== undefined && !u.is_master) { sets.push('role = ?'); vals.push(b.role === 'admin' ? 'admin' : 'member'); }
+        if (b.plan_id !== undefined) {
+          const p = await env.DB.prepare('SELECT id FROM plans WHERE id = ?').bind(String(b.plan_id)).first();
+          if (!p) return err(400, 'Plano não encontrado.');
+          sets.push('plan_id = ?'); vals.push(p.id);
+        }
+        if (b.plan_expires_at !== undefined) { sets.push('plan_expires_at = ?'); vals.push(b.plan_expires_at ? parseInt(b.plan_expires_at) : null); }
+        if (b.name !== undefined) { sets.push('name = ?'); vals.push(str(b.name, 80).trim()); }
+        if (!sets.length) return err(400, 'Nada para alterar.');
+        await env.DB.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).bind(...vals, id).run();
+        return json({ ok: true });
+      }
       if (action === 'link' && m === 'POST') {
         const purpose = u.status === 'invited' ? 'invite' : 'reset';
         const tok = await createLinkToken(env, id, purpose);
@@ -281,10 +354,52 @@ async function api(req, env, url) {
         await env.DB.batch([
           env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(id),
           env.DB.prepare('DELETE FROM invites WHERE user_id = ?').bind(id),
-          env.DB.prepare('DELETE FROM songs WHERE user_id = ?').bind(id),
+          env.DB.prepare('DELETE FROM songs WHERE user_id = ? AND is_public = 0').bind(id),
+          env.DB.prepare('UPDATE songs SET user_id = ? WHERE user_id = ? AND is_public = 1').bind(me.id, id),
           env.DB.prepare('DELETE FROM setlists WHERE user_id = ?').bind(id),
           env.DB.prepare('DELETE FROM users WHERE id = ?').bind(id),
         ]);
+        return json({ ok: true });
+      }
+    }
+
+    /* ----- planos ----- */
+    if (path === '/api/admin/plans' && m === 'GET') {
+      const r = await env.DB.prepare(`SELECT p.*, (SELECT COUNT(*) FROM users u WHERE u.plan_id = p.id) AS users FROM plans p ORDER BY sort, price_cents`).all();
+      return json({ plans: r.results.map(p => ({ ...planOut(p), users: p.users })) });
+    }
+    mm = path.match(/^\/api\/admin\/plans\/([a-z0-9-]{2,40})$/);
+    if (mm) {
+      if (!master) return needMaster();
+      const id = mm[1];
+      const ex = await env.DB.prepare('SELECT * FROM plans WHERE id = ?').bind(id).first();
+      if (m === 'DELETE') {
+        if (!ex) return json({ ok: true });
+        if (ex.is_default) return err(400, 'O plano padrão não pode ser excluído.');
+        const c = await env.DB.prepare('SELECT COUNT(*) AS n FROM users WHERE plan_id = ?').bind(id).first();
+        if (c.n) return err(400, `Há ${c.n} usuário(s) neste plano. Mude-os de plano antes de excluir.`);
+        await env.DB.prepare('DELETE FROM plans WHERE id = ?').bind(id).run();
+        return json({ ok: true });
+      }
+      if (m === 'PUT') {
+        const b = await body(req);
+        const name = str(b.name, 60).trim();
+        if (!name) return err(400, 'Dê um nome ao plano.');
+        const lim = v => (v === null || v === '' || v === undefined) ? null : Math.max(0, parseInt(v) || 0);
+        const interval = ['none', 'month', 'year'].includes(b.billing_interval) ? b.billing_interval : 'none';
+        const isDefault = b.is_default ? 1 : 0;
+        const feats = JSON.stringify((Array.isArray(b.features) ? b.features : []).map(f => str(f, 80)).filter(Boolean).slice(0, 20));
+        const vals = [name, str(b.description, 300), Math.max(0, Math.round(Number(b.price_cents) || 0)), interval,
+          lim(b.max_songs), lim(b.max_setlists), feats, b.active === false ? 0 : 1, isDefault, parseInt(b.sort) || 0];
+        const stmts = [];
+        if (isDefault) stmts.push(env.DB.prepare('UPDATE plans SET is_default = 0 WHERE id != ?').bind(id));
+        if (ex) stmts.push(env.DB.prepare(`UPDATE plans SET name = ?, description = ?, price_cents = ?, billing_interval = ?, max_songs = ?,
+            max_setlists = ?, features = ?, active = ?, is_default = ?, sort = ? WHERE id = ?`).bind(...vals, id));
+        else stmts.push(env.DB.prepare(`INSERT INTO plans (name, description, price_cents, billing_interval, max_songs, max_setlists, features, active, is_default, sort, id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(...vals, id));
+        await env.DB.batch(stmts);
+        const still = await env.DB.prepare('SELECT COUNT(*) AS n FROM plans WHERE is_default = 1').first();
+        if (!still.n) await env.DB.prepare(`UPDATE plans SET is_default = 1 WHERE id = 'gratuito'`).run();
         return json({ ok: true });
       }
     }

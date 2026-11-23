@@ -34,6 +34,8 @@ input[type=text],input[type=search],input[type=date],input[type=number],input[ty
 input:focus,textarea:focus,select:focus{border-color:var(--accent)}
 label.f{display:flex;flex-direction:column;gap:5px;font-size:13px;color:var(--muted)}
 label.f>input,label.f>select{color:var(--text);font-size:15px}
+.chk{display:flex;gap:10px;align-items:flex-start;font-size:14px;cursor:pointer;padding:8px 10px;border:1px solid var(--line);border-radius:10px}
+.chk input{margin-top:3px;accent-color:var(--accent);width:16px;height:16px}
 
 /* top bar */
 .top{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
@@ -105,6 +107,14 @@ textarea.code{font-family:'JetBrains Mono',monospace;font-size:14px;line-height:
 .sheet .cp i{display:block;font-style:normal;color:var(--chord);font-weight:700;padding-right:.35em}
 .sheet.nochords .sec{margin-top:1.1em}
 .sheet.cols{column-count:2;column-gap:56px;column-rule:1px solid var(--line)}
+.sheet .blk{--bc:var(--muted);display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px;margin:.45em 0;padding:.35em .7em;border-left:3px solid var(--bc);border-radius:0 8px 8px 0;background:color-mix(in srgb,var(--bc) 10%,transparent);break-inside:avoid}
+.sheet .blk .bt{font-family:'Space Grotesk',sans-serif;font-size:.72em;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--bc)}
+.sheet .blk .bd{font-family:'Space Grotesk',sans-serif;font-size:.85em}
+.sheet .blk .bm{color:var(--chord);font-weight:700;white-space:pre}
+.b-frase{--bc:#7cc4ff!important}.b-conv{--bc:#f5b43c!important}.b-pass{--bc:#5fd39a!important}.b-vir{--bc:#ff7a7a!important}.b-solo{--bc:#c792ea!important}.b-obs{--bc:#8d95a5!important}.b-gen{--bc:#e0a3ff!important}
+[data-theme=light] .b-frase{--bc:#1d4ed8!important}[data-theme=light] .b-conv{--bc:#b45309!important}[data-theme=light] .b-pass{--bc:#15803d!important}[data-theme=light] .b-vir{--bc:#c0392b!important}[data-theme=light] .b-solo{--bc:#7e22ce!important}
+.tag.padrao{color:var(--sec);border-color:color-mix(in srgb,var(--sec) 50%,transparent)}
+.tag.arr{color:var(--chord);border-color:color-mix(in srgb,var(--chord) 50%,transparent)}
 .sheet .note{font-family:'Space Grotesk',sans-serif;font-size:.8em;color:var(--muted);border-left:3px solid var(--line);padding:4px 10px;margin-bottom:1em;white-space:pre-wrap}
 
 /* viewer / stage */
@@ -193,6 +203,7 @@ a.btn{text-decoration:none;display:inline-flex;align-items:center;gap:4px;color:
 .badge.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 50%,transparent)}
 .badge.warn{color:var(--chord);border-color:color-mix(in srgb,var(--chord) 50%,transparent)}
 .badge.bad{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 50%,transparent)}
+.sm-sel{width:auto!important;padding:5px 8px!important;font-size:13px}
 
 @media (max-width:820px){
   .toolbar{flex-wrap:wrap}
@@ -277,6 +288,8 @@ function detectKey(content){
 /* Transpõe o texto inteiro (usado no editor para "gravar" o novo tom) */
 function transposeText(content,s,flat){
   return content.split('\n').map(line=>{
+    const b=line.match(BLK_RE);
+    if(b){const i=line.indexOf('||');return i<0?line:line.slice(0,i+2)+transposeChordLine(line.slice(i+2),s,flat)}
     if(isChordLine(line)) return transposeChordLine(line,s,flat);
     return line.replace(/\[([^\]]+)\]/g,(m,c)=>isChord(c)?'['+transposeChord(c,s,flat)+']':m);
   }).join('\n');
@@ -284,8 +297,19 @@ function transposeText(content,s,flat){
 
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 
+/* Blocos: "@Convenção: descrição || G  D/F#  Em" */
+const BLK_RE=/^\s*@([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ0-9 ºª.\-]{0,24}):\s?(.*)$/;
+const BLK_TYPES=['Frase','Convenção','Passagem','Virada','Riff','Solo','Intro','Final','Dinâmica','Observação'];
+function blkClass(t){t=norm(t);if(t.startsWith('frase'))return 'b-frase';if(t.startsWith('conven'))return 'b-conv';if(t.startsWith('passag'))return 'b-pass';
+  if(t.startsWith('virad'))return 'b-vir';if(t.startsWith('riff')||t.startsWith('solo'))return 'b-solo';if(t.startsWith('obs')||t.startsWith('dinam'))return 'b-obs';return 'b-gen'}
+function parseBlk(line){const m=line.match(BLK_RE);if(!m)return null;const i=m[2].indexOf('||');
+  return {type:m[1].trim(),desc:(i<0?m[2]:m[2].slice(0,i)).trim(),music:i<0?'':m[2].slice(i+2).replace(/^\s+/,'')}}
+function blkHTML(b,s,flat,show){
+  return `<div class="blk ${blkClass(b.type)}"><span class="bt">${esc(b.type)}</span>${b.desc?`<span class="bd">${esc(b.desc)}</span>`:''}${b.music&&show?`<span class="bm">${esc(transposeChordLine(b.music,s,flat))}</span>`:''}</div>`;
+}
 function classify(line){
   if(!line.trim()) return 'gap';
+  if(BLK_RE.test(line)) return 'blk';
   const br=line.match(/^\s*\[([^\]]+)\]\s*$/);
   if(br && !isChord(br[1].trim())) return 'sec';
   if(/\[[^\]]+\]/.test(line) && (line.match(/\[([^\]]+)\]/g)||[]).some(x=>isChord(x.slice(1,-1)))) return 'cp';
@@ -313,6 +337,7 @@ function renderSheet(content,s,flat,show){
   for(let i=0;i<lines.length;i++){
     const line=lines[i],t=classify(line);
     if(t==='gap'){html+='<div class="gap"></div>';continue}
+    if(t==='blk'){html+=blkHTML(parseBlk(line),s,flat,show);continue}
     if(t==='sec'){html+=`<div class="sec">${esc(line.trim().replace(/^\[|\]$|:$/g,''))}</div>`;continue}
     if(t==='tab'){if(show)html+=`<div class="tab">${esc(line)}</div>`;continue}
     if(t==='cp'){html+=`<div class="ly${show?' cpl':''}">${cpHTML(line,s,flat,show)}</div>`;continue}
@@ -408,7 +433,7 @@ async function initCloud(){
 }
 
 /* ============ Conta NaNota (servidor Cloudflare) ============ */
-let ME=null;
+let PLAN=null;
 async function api(method,path,data){
   let r;
   try{r=await fetch(path,{method,credentials:'same-origin',headers:{'content-type':'application/json','x-nanota':'1'},body:data===undefined?undefined:JSON.stringify(data)})}
@@ -421,6 +446,8 @@ function mapErr(e){
   if(e.status===401){showLogin('Sua sessão expirou. Entre de novo.');throw {code:'session'}}
   if(e.status===403){showChangePw(true);throw {code:'session'}}
   if(e.status===413)throw {code:'quota_exceeded'};
+  if(e.status===402){toast(e.message);setTimeout(()=>loadData(),400);throw {code:'session'}}
+  if(e.status===403&&/padrão/.test(e.message)){toast(e.message);throw {code:'session'}}
   if(!e.status||e.status>=500)throw {code:'unavailable'};
   throw {code:'other',message:e.message};
 }
@@ -435,7 +462,7 @@ function useUserCache(){LS_KEY='nanota.data.'+ME.id}
 async function initApi(){
   const tok=new URLSearchParams(location.search).get('convite');
   if(tok) return showInvite(tok);
-  try{ME=(await api('GET','/api/me')).user}
+  try{const r=await api('GET','/api/me');ME=r.user;PLAN=r.plan}
   catch(e){
     if(e.status===401) return showLogin();
     authScreen('<h2>Sem conexão</h2><p>Não consegui falar com o servidor do NaNota. Verifique a internet e tente de novo.</p><button class="btn primary" onclick="location.reload()">Tentar de novo</button>');
@@ -452,7 +479,9 @@ async function loadData(){
   try{
     const d=await api('GET','/api/data');
     const songs={},sets={};d.songs.forEach(s=>songs[s.id]=s);d.sets.forEach(s=>sets[s.id]=s);
-    S.songs=songs;S.sets=sets;COL=APICOL;MODE='cloud';saveLocal();render();
+    S.songs=songs;S.sets=sets;COL=APICOL;MODE='cloud';saveLocal();
+    if(location.hash==='#repertorios'){S.view='sets';history.replaceState(null,'','/')}
+    render();
   }catch(e){
     if(e.status===401) return showLogin();
     if(e.status===403) return showChangePw(true);
@@ -531,11 +560,18 @@ async function logout(){
   try{localStorage.removeItem(LS_KEY)}catch(e){}
   LS_KEY='nanota.data.anon';showLogin();
 }
-function openAccount(){
-  const m=modal(`<div class="mh">${esc(ME.name||'Minha conta')}</div><div class="mb"><p>${esc(ME.email)} · ${ME.role==='admin'?'Administrador':'Membro'}</p></div>
-    <div class="mf"><button class="btn" data-a="pw">Trocar senha</button>${ME.role==='admin'?'<button class="btn" data-a="users">👥 Usuários</button>':''}<button class="btn danger" data-a="out">Sair</button></div>`);
+function roleLabel(u){return u.is_master||u.isMaster?'Master':u.role==='admin'?'Administrador':'Membro'}
+function money(c,i){if(!c)return 'Grátis';const v=(c/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});return v+(i==='month'?'/mês':i==='year'?'/ano':'')}
+async function openAccount(){
+  try{const r=await api('GET','/api/me');ME=r.user;PLAN=r.plan}catch(e){}
+  const m=modal(`<div class="mh">${esc(ME.name||'Minha conta')}</div><div class="mb">
+      <p>${esc(ME.email)}</p>
+      <div class="chips"><span class="chip">Perfil: <b>${roleLabel(ME)}</b></span>${PLAN?`<span class="chip">Plano: <b>${esc(PLAN.name)}</b> · ${money(PLAN.priceCents,PLAN.interval)}</span>`:''}</div>
+      ${PLAN&&(PLAN.maxSongs!=null||PLAN.maxSetlists!=null)&&!isStaff()?`<p class="hint">Limites: ${PLAN.maxSongs!=null?PLAN.maxSongs+' músicas próprias':'músicas ilimitadas'} · ${PLAN.maxSetlists!=null?PLAN.maxSetlists+' repertórios':'repertórios ilimitados'}</p>`:''}
+    </div>
+    <div class="mf"><button class="btn" data-a="pw">Trocar senha</button>${isStaff()?'<button class="btn" data-a="users">👥 Usuários</button>':''}${ME.isMaster?'<button class="btn" data-a="plans">💳 Planos</button>':''}<button class="btn danger" data-a="out">Sair</button></div>`);
   m.el.addEventListener('click',e=>{const b=e.target.closest('[data-a]');if(!b)return;m.close();
-    if(b.dataset.a==='pw')showChangePw(false);if(b.dataset.a==='users')openUsers();if(b.dataset.a==='out')logout()});
+    if(b.dataset.a==='pw')showChangePw(false);if(b.dataset.a==='users')openUsers('users');if(b.dataset.a==='plans')openUsers('plans');if(b.dataset.a==='out')logout()});
 }
 function linkBox(link,email,purpose){
   const msg=(purpose==='reset'?'Use este link para criar uma nova senha no NaNota: ':'Você foi convidado para o NaNota! Crie sua senha aqui: ')+link;
@@ -543,32 +579,87 @@ function linkBox(link,email,purpose){
     <input type="text" readonly value="${esc(link)}" class="lnk" onclick="this.select()">
     <div class="chips"><button class="btn sm primary" data-copy="${esc(link)}">Copiar link</button><a class="btn sm" href="https://wa.me/?text=${encodeURIComponent(msg)}" target="_blank" rel="noopener">Enviar pelo WhatsApp</a></div>`;
 }
-async function openUsers(){
-  const m=modal(`<div class="mh">Usuários</div><div class="mb" id="uBody"><p>Carregando…</p></div><div class="mf"><button class="btn" data-u="close">Fechar</button></div>`);
+async function openUsers(tab){
+  const master=!!ME.isMaster;
+  const m=modal(`<div class="mh">Administração</div>
+    <div class="itabs"><button data-t="users">👥 Usuários</button>${master?'<button data-t="plans">💳 Planos</button>':''}</div>
+    <div class="mb" id="uBody" style="padding-top:14px"><p>Carregando…</p></div><div class="mf"><button class="btn" data-u="close">Fechar</button></div>`);
   m.el.querySelector('.mod').classList.add('wide');
-  const body=m.el.querySelector('#uBody');let out='';
-  const draw=async()=>{
+  const body=m.el.querySelector('#uBody');let out='',plans=[],cur=tab==='plans'&&master?'plans':'users',editPlan=null;
+  const loadPlans=async()=>{try{plans=(await api('GET','/api/admin/plans')).plans}catch(e){plans=[]}};
+  const drawUsers=async()=>{
     let users;try{users=(await api('GET','/api/admin/users')).users}catch(e){body.innerHTML=`<p>${esc(e.message)}</p>`;return}
+    if(!plans.length)await loadPlans();
+    const pname=id=>{const p=plans.find(x=>x.id===id);return p?p.name:id};
     const st=u=>u.status==='active'?'<span class="badge ok">ativo</span>':u.status==='invited'?'<span class="badge warn">convite pendente</span>':'<span class="badge bad">bloqueado</span>';
-    body.innerHTML=`<form id="uAdd" class="egrid" style="grid-template-columns:2fr 2fr 1fr auto;align-items:end">
+    body.innerHTML=`<form id="uAdd" class="egrid" style="grid-template-columns:2fr 2fr 1fr ${master?'1fr ':''}auto;align-items:end">
         <label class="f">Nome<input type="text" id="uN" placeholder="Nome"></label>
         <label class="f">E-mail<input type="email" id="uE" placeholder="email@exemplo.com" required></label>
-        <label class="f">Papel<select id="uR"><option value="member">Membro</option><option value="admin">Admin</option></select></label>
+        <label class="f">Perfil<select id="uR"><option value="member">Membro</option>${master?'<option value="admin">Administrador</option>':''}</select></label>
+        ${master?`<label class="f">Plano<select id="uP">${plans.map(p=>`<option value="${esc(p.id)}" ${p.isDefault?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label>`:''}
         <button class="btn primary" type="submit">Convidar</button></form>
       <div id="uOut">${out}</div>
-      <ul class="ulist">${users.map(u=>`<li><div class="li-main" style="min-width:160px"><div class="li-t">${esc(u.name||'—')} ${u.role==='admin'?'<span class="badge">admin</span>':''} ${st(u)}</div><div class="li-a">${esc(u.email)} · ${u.songs} música${u.songs==1?'':'s'}${u.last_login_at?' · último acesso '+new Date(u.last_login_at*1000).toLocaleDateString('pt-BR'):''}</div></div>
-        ${u.id===ME.id?'<span class="hint">você</span>':`<div class="chips">
+      <ul class="ulist">${users.map(u=>{const self=u.id===ME.id,locked=u.is_master||(!master&&u.role==='admin');
+        return `<li><div class="li-main" style="min-width:180px"><div class="li-t">${esc(u.name||'—')} <span class="badge${u.is_master?' warn':''}">${roleLabel(u)}</span> ${st(u)}</div>
+          <div class="li-a">${esc(u.email)} · ${u.songs} música${u.songs==1?'':'s'} · ${u.sets} repertório${u.sets==1?'':'s'}${u.last_login_at?' · último acesso '+new Date(u.last_login_at*1000).toLocaleDateString('pt-BR'):''}</div></div>
+        <div class="chips">
+          ${master?`<select class="sm-sel" data-plan="${u.id}" title="Plano">${plans.map(p=>`<option value="${esc(p.id)}" ${p.id===u.plan_id?'selected':''}>${esc(p.name)}</option>`).join('')}</select>`:`<span class="chip">${esc(pname(u.plan_id))}</span>`}
+          ${master&&!u.is_master?`<select class="sm-sel" data-role="${u.id}" title="Perfil"><option value="member" ${u.role==='member'?'selected':''}>Membro</option><option value="admin" ${u.role==='admin'?'selected':''}>Administrador</option></select>`:''}
+          ${self||locked?(self?'<span class="hint">você</span>':''):`
           <button class="btn sm" data-ua="link" data-id="${u.id}" data-email="${esc(u.email)}">${u.status==='invited'?'Novo convite':'Link de nova senha'}</button>
           ${u.status==='disabled'?`<button class="btn sm" data-ua="enable" data-id="${u.id}">Desbloquear</button>`:`<button class="btn sm" data-ua="disable" data-id="${u.id}">Bloquear</button>`}
-          <button class="btn sm danger" data-ua="del" data-id="${u.id}" data-email="${esc(u.email)}">Excluir</button></div>`}</li>`).join('')}</ul>`;
+          <button class="btn sm danger" data-ua="del" data-id="${u.id}" data-email="${esc(u.email)}">Excluir</button>`}
+        </div></li>`}).join('')}</ul>`;
     body.querySelector('#uAdd').onsubmit=async ev=>{ev.preventDefault();
-      try{const email=body.querySelector('#uE').value;
-        const r=await api('POST','/api/admin/users',{name:body.querySelector('#uN').value,email,role:body.querySelector('#uR').value});
-        out=linkBox(r.link,email,'invite');await draw();
+      try{const email=body.querySelector('#uE').value;const P=body.querySelector('#uP');
+        const r=await api('POST','/api/admin/users',{name:body.querySelector('#uN').value,email,role:body.querySelector('#uR').value,plan_id:P?P.value:undefined});
+        out=linkBox(r.link,email,'invite');await drawUsers();
       }catch(e){toast(e.message)}};
+    body.querySelectorAll('[data-plan]').forEach(sel=>sel.onchange=async()=>{try{await api('PATCH','/api/admin/users/'+sel.dataset.plan,{plan_id:sel.value});toast('Plano alterado.')}catch(e){toast(e.message);drawUsers()}});
+    body.querySelectorAll('[data-role]').forEach(sel=>sel.onchange=async()=>{try{await api('PATCH','/api/admin/users/'+sel.dataset.role,{role:sel.value});toast('Perfil alterado.');drawUsers()}catch(e){toast(e.message);drawUsers()}});
   };
+  const planForm=p=>{p=p||{id:'',name:'',description:'',priceCents:0,interval:'month',maxSongs:null,maxSetlists:null,active:true,isDefault:false,sort:0};
+    return `<form id="pForm" style="display:flex;flex-direction:column;gap:10px;border:1px solid var(--line);border-radius:12px;padding:12px">
+      <b>${p.id?'Editar plano':'Novo plano'}</b>
+      <div class="egrid" style="grid-template-columns:2fr 1fr 1fr">
+        <label class="f">Nome<input type="text" id="pN" value="${esc(p.name)}" placeholder="ex: Pro" required></label>
+        <label class="f">Preço (R$)<input type="text" id="pV" value="${p.priceCents?(p.priceCents/100).toFixed(2).replace('.',','):''}" inputmode="decimal" placeholder="0,00"></label>
+        <label class="f">Cobrança<select id="pI"><option value="none" ${p.interval==='none'?'selected':''}>Sem cobrança</option><option value="month" ${p.interval==='month'?'selected':''}>Mensal</option><option value="year" ${p.interval==='year'?'selected':''}>Anual</option></select></label>
+      </div>
+      <label class="f">Descrição<input type="text" id="pD" value="${esc(p.description||'')}" placeholder="O que o plano oferece"></label>
+      <div class="egrid" style="grid-template-columns:1fr 1fr">
+        <label class="f">Limite de músicas próprias<input type="number" id="pS" min="0" value="${p.maxSongs??''}" placeholder="vazio = ilimitado"></label>
+        <label class="f">Limite de repertórios<input type="number" id="pR" min="0" value="${p.maxSetlists??''}" placeholder="vazio = ilimitado"></label>
+      </div>
+      <label class="chk"><input type="checkbox" id="pA" ${p.active?'checked':''}> <span>Ativo (pode ser atribuído)</span></label>
+      <label class="chk"><input type="checkbox" id="pP" ${p.isDefault?'checked':''}> <span>Plano padrão para novos usuários</span></label>
+      <div class="chips"><button class="btn primary" type="submit">Salvar plano</button><button class="btn" type="button" data-pc="1">Cancelar</button>${p.id&&!p.isDefault?`<button class="btn danger" type="button" data-pdel="${esc(p.id)}">Excluir plano</button>`:''}</div>
+      <input type="hidden" id="pId" value="${esc(p.id)}"></form>`};
+  const drawPlans=async()=>{
+    await loadPlans();
+    body.innerHTML=`<div class="info">Os planos organizam as contas e limitam o uso (músicas próprias e repertórios). <b>A cobrança automática ainda não está ligada</b> — por enquanto, você atribui o plano a cada usuário manualmente. Administradores e o master não têm limites. As cifras padrão do catálogo não contam no limite.</div>
+      ${editPlan!==null?planForm(editPlan):'<div><button class="btn primary" data-pn="1">+ Novo plano</button></div>'}
+      <ul class="ulist">${plans.map(p=>`<li><div class="li-main"><div class="li-t">${esc(p.name)} ${p.isDefault?'<span class="badge ok">padrão</span>':''} ${p.active?'':'<span class="badge bad">inativo</span>'}</div>
+        <div class="li-a">${money(p.priceCents,p.interval)} · ${p.maxSongs!=null?p.maxSongs+' músicas':'músicas ilimitadas'} · ${p.maxSetlists!=null?p.maxSetlists+' repertórios':'repertórios ilimitados'} · ${p.users} usuário${p.users==1?'':'s'}</div></div>
+        <button class="btn sm" data-pe="${esc(p.id)}">Editar</button></li>`).join('')}</ul>`;
+    const f=body.querySelector('#pForm');
+    if(f)f.onsubmit=async ev=>{ev.preventDefault();const q=id=>body.querySelector('#'+id);
+      const name=q('pN').value.trim();let id=q('pId').value||slug(name).slice(0,40);if(id.length<2)id='plano-'+Date.now().toString(36);
+      const price=Math.round(parseFloat((q('pV').value||'0').replace(/\./g,'').replace(',','.'))*100)||0;
+      try{await api('PUT','/api/admin/plans/'+id,{name,description:q('pD').value,price_cents:price,billing_interval:q('pI').value,
+          max_songs:q('pS').value===''?null:+q('pS').value,max_setlists:q('pR').value===''?null:+q('pR').value,active:q('pA').checked,is_default:q('pP').checked});
+        editPlan=null;toast('Plano salvo.');drawPlans()}catch(e){toast(e.message)}};
+  };
+  const draw=()=>{m.el.querySelectorAll('.itabs button').forEach(b=>b.classList.toggle('act',b.dataset.t===cur));return cur==='plans'?drawPlans():drawUsers()};
   m.el.addEventListener('click',async e=>{
     if(e.target.closest('[data-u=close]'))return m.close();
+    const t=e.target.closest('.itabs [data-t]');if(t){cur=t.dataset.t;editPlan=null;out='';draw();return}
+    if(e.target.closest('[data-pn]')){editPlan=Object.assign({},{id:'',name:'',description:'',priceCents:0,interval:'month',maxSongs:null,maxSetlists:null,active:true,isDefault:false});drawPlans();return}
+    if(e.target.closest('[data-pc]')){editPlan=null;drawPlans();return}
+    const pe=e.target.closest('[data-pe]');if(pe){editPlan=plans.find(p=>p.id===pe.dataset.pe)||null;drawPlans();return}
+    const pd=e.target.closest('[data-pdel]');
+    if(pd){m.el.style.display='none';const ok=await confirmBox('Excluir este plano?');m.el.style.display='';if(!ok)return;
+      try{await api('DELETE','/api/admin/plans/'+pd.dataset.pdel);editPlan=null;toast('Plano excluído.');drawPlans()}catch(err){toast(err.message)}return}
     const c=e.target.closest('[data-copy]');
     if(c){try{await navigator.clipboard.writeText(c.dataset.copy);toast('Link copiado.')}catch(_){const i=m.el.querySelector('.lnk');i&&i.select()}return}
     const b=e.target.closest('[data-ua]');if(!b)return;const id=b.dataset.id,a=b.dataset.ua;
@@ -576,8 +667,8 @@ async function openUsers(){
       if(a==='link'){const r=await api('POST',`/api/admin/users/${id}/link`);out=linkBox(r.link,b.dataset.email,r.purpose)}
       if(a==='disable')await api('POST',`/api/admin/users/${id}/disable`);
       if(a==='enable')await api('POST',`/api/admin/users/${id}/enable`);
-      if(a==='del'){m.el.style.display='none';const ok=await confirmBox(`Excluir ${b.dataset.email}? As músicas e repertórios dessa pessoa serão apagados.`);m.el.style.display='';if(!ok)return;await api('DELETE',`/api/admin/users/${id}`);out=''}
-      await draw();
+      if(a==='del'){m.el.style.display='none';const ok=await confirmBox(`Excluir ${b.dataset.email}? As músicas próprias e os repertórios dessa pessoa serão apagados (cifras padrão que ela criou passam para você).`);m.el.style.display='';if(!ok)return;await api('DELETE',`/api/admin/users/${id}`);out=''}
+      await drawUsers();
     }catch(err){toast(err.message)}
   });
   draw();
@@ -585,7 +676,7 @@ async function openUsers(){
 
 /* ============ Utilidades de UI ============ */
 const app=document.getElementById('app');
-function toast(msg){const t=document.createElement('div');t.className='toast';t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),2600)}
+function toast(msg){document.querySelectorAll('.toast').forEach(x=>x.remove());const t=document.createElement('div');t.className='toast';t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),2600)}
 function modal(html){
   const ov=document.createElement('div');ov.className='ov';ov.innerHTML=`<div class="mod">${html}</div>`;
   document.body.appendChild(ov);
@@ -665,14 +756,14 @@ function renderLibList(){
   const all=Object.keys(S.songs).length;
   if(!all){
     box.innerHTML=`<div class="empty"><h2>Sua biblioteca está vazia</h2><p>Crie sua primeira música colando a cifra de qualquer site, ou comece com um exemplo.</p>
-    <div class="row"><button class="btn primary" data-act="new-song">+ Nova música</button><button class="btn" data-act="import-song">⇣ Importar cifra</button><button class="btn" data-act="import-audio">♪ Acordes de um áudio</button><button class="btn" data-act="examples">Adicionar exemplos</button><button class="btn" data-act="import">Importar backup</button></div></div>`;
+    <div class="row"><button class="btn primary" data-act="new-song">+ Nova música</button><button class="btn" data-act="import-song">⇣ Importar cifra</button><button class="btn" data-act="import-pdf">📄 Importar PDF</button><button class="btn" data-act="import-audio">♪ Acordes de um áudio</button><button class="btn" data-act="examples">Adicionar exemplos</button><button class="btn" data-act="import">Importar backup</button></div></div>`;
     return;
   }
   const f=libFiltered();
   box.innerHTML=`<div class="count">${f.length} de ${all} música${all>1?'s':''} · <span class="hint"><kbd>Enter</kbd> abre a primeira · <kbd>Ctrl</kbd>+<kbd>K</kbd> busca rápida</span></div>
   <ul class="list">${f.map((s,i)=>`<li data-act="open-song" data-i="${i}">
     <div class="li-main"><div class="li-t">${esc(s.title||'Sem título')}</div>
-    <div class="li-a">${esc(s.artist||'—')}${(s.tags||[]).map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div></div>
+    <div class="li-a">${esc(s.artist||'—')}${s.catalog?'<span class="tag padrao">padrão</span>':''}${(s.tags||[]).map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div></div>
     ${s.key?`<span class="key">${esc(keyAt(s.key,s.transpose||0))}</span>`:''}</li>`).join('')}</ul>
   ${f.length?'':'<p class="hint" style="text-align:center;padding:30px">Nada encontrado.</p>'}`;
 }
@@ -705,7 +796,8 @@ function renderSet(){
     ${items.length?`<ul class="list" id="items">${items.map((it,i)=>{const s=S.songs[it.songId];
       return `<li class="item" draggable="true" data-i="${i}">
         <span class="grip" title="Arraste para reordenar">⠿</span><span class="n">${i+1}</span>
-        <div class="li-main play" data-act="play-set" data-id="${set.id}" data-i="${i}"><div class="li-t">${esc(s?s.title:'(música excluída)')}</div><div class="li-a">${esc(s?s.artist||'—':'')}</div></div>
+        <div class="li-main play" data-act="play-set" data-id="${set.id}" data-i="${i}"><div class="li-t">${esc(s?s.title:'(música excluída)')}${it.content!=null||it.notes!=null?' <span class="tag arr">versão própria</span>':''}</div><div class="li-a">${esc(s?s.artist||'—':'')}</div></div>
+        ${s?`<button class="btn sm" data-act="it-arr" data-i="${i}" title="Personalizar a cifra só neste repertório">✎ Versão</button>`:''}
         ${s&&s.key?`<div class="grp"><button class="btn" data-act="it-tr" data-i="${i}" data-d="-1">−</button><span class="lbl">${esc(keyAt(s.key,it.transpose||0))}</span><button class="btn" data-act="it-tr" data-i="${i}" data-d="1">+</button></div>`:''}
         <div class="ctl"><button class="btn icon sm ghost" data-act="it-mv" data-i="${i}" data-d="-1" ${i?'':'disabled'} title="Subir">↑</button><button class="btn icon sm ghost" data-act="it-mv" data-i="${i}" data-d="1" ${i<items.length-1?'':'disabled'} title="Descer">↓</button><button class="btn icon sm ghost danger" data-act="it-rm" data-i="${i}" title="Remover">✕</button></div>
       </li>`}).join('')}</ul>`
@@ -783,40 +875,56 @@ Final: C  D  G`},
 [F]Bom dia, [G]manhã
 [E7]Tudo recome[Am]ça`}];
 function blankSong(){return {id:uid('s'),type:'song',title:'',artist:'',key:'',bpm:'',tags:[],notes:'',content:'',link:'',transpose:0}}
-function openEditor(song,ret,dirty){S.edit={song:clone(song),isNew:!S.songs[song.id],ret,dirty:!!dirty};S.view='edit';render()}
+let ME=null;
+const API_MODE=typeof initApi==='function';
+function isStaff(){return !ME||ME.role==='admin'||!!ME.isMaster}
+function canEditSong(s){return !!s&&(!s.catalog||isStaff())}
+function openEditor(song,ret,dirty){S.edit={mode:'song',song:clone(song),isNew:!S.songs[song.id],ret,dirty:!!dirty};S.view='edit';render()}
+function openArrangement(setId,idx,ret){
+  const set=S.sets[setId],it=set&&set.items[idx],base=it&&S.songs[it.songId];
+  if(!base){toast('Música não encontrada.');return}
+  S.edit={mode:'arr',setId,idx,ret,dirty:false,isNew:false,base,hasOverride:it.content!=null||it.notes!=null,
+    song:{...clone(base),content:it.content!=null?it.content:base.content,notes:it.notes!=null?it.notes:(base.notes||'')}};
+  S.view='edit';render();
+}
 function safeUrl(u){try{const x=new URL(u);return /^https?:$/.test(x.protocol)?x.href:''}catch(e){return ''}}
 function renderEdit(){
-  const e=S.edit,s=e.song;
+  const e=S.edit,s=e.song,arr=e.mode==='arr';
+  const set=arr?S.sets[e.setId]:null;
+  const title=arr?'Versão no repertório':(e.isNew?'Nova música':'Editar música');
   app.innerHTML=`<div class="edit">
-    <div class="ebar"><button class="btn ghost" data-act="e-cancel">← Voltar</button><div class="t">${e.isNew?'Nova música':'Editar música'}</div>
-      ${e.isNew?'':'<button class="btn danger ghost" data-act="e-del">Excluir</button>'}<button class="btn primary" data-act="e-save">Salvar</button></div>
+    <div class="ebar"><button class="btn ghost" data-act="e-cancel">← Voltar</button><div class="t">${title}</div>
+      ${arr&&e.hasOverride?'<button class="btn ghost" data-act="e-restore">Restaurar padrão</button>':''}
+      ${!arr&&!e.isNew&&canEditSong(S.songs[s.id])?'<button class="btn danger ghost" data-act="e-del">Excluir</button>':''}
+      <button class="btn primary" data-act="e-save">Salvar</button></div>
     <div class="ebody">
       <div class="ecol">
+        ${arr?`<div class="info"><b>${esc(s.title)}</b>${s.artist?' · '+esc(s.artist):''} no repertório <b>${esc(set?set.name:'')}</b>.<br>
+          As mudanças valem só para este repertório — a cifra padrão continua igual.${canEditSong(e.base)?' <a href="#" data-act="e-base">Editar a cifra padrão</a>':''}</div>`:`
         <div class="egrid">
           <label class="f">Título<input type="text" id="eTitle" value="${esc(s.title)}" placeholder="Nome da música"></label>
           <label class="f">Artista<input type="text" id="eArtist" value="${esc(s.artist)}" placeholder="Artista / banda"></label>
           <label class="f">Tom<input type="text" id="eKey" value="${esc(s.key)}" placeholder="ex: G, Am"></label>
           <label class="f">BPM<input type="text" id="eBpm" value="${esc(s.bpm)}" inputmode="numeric" placeholder="—"></label>
         </div>
-        <label class="f">Tags (separadas por vírgula)<input type="text" id="eTags" value="${esc((s.tags||[]).join(', '))}" placeholder="louvor, rápida, abertura"></label>
+        <label class="f">Tags (separadas por vírgula)<input type="text" id="eTags" value="${esc((s.tags||[]).join(', '))}" placeholder="louvor, rápida, abertura"></label>`}
         <label class="f">Observações (aparecem no topo da cifra)<input type="text" id="eNotes" value="${esc(s.notes||'')}" placeholder="Capotraste na 2ª, entrada só violão…"></label>
-        <label class="f">Link de referência (YouTube, site da cifra…)<input type="text" id="eLink" value="${esc(s.link||'')}" placeholder="https://youtube.com/watch?v=…" inputmode="url"></label>
-        <div class="etools"><span>Transpor o texto:</span><button class="btn sm" data-act="e-tr" data-d="-1">− ½ tom</button><button class="btn sm" data-act="e-tr" data-d="1">+ ½ tom</button><button class="btn sm" data-act="e-detect">Detectar tom</button><span style="flex:1"></span><span class="hint">Cole a cifra de qualquer site. Use <b>[Refrão]</b> para seções ou <b>[C]letra</b> (ChordPro).</span></div>
+        ${arr?'':`<label class="f">Link de referência (YouTube, Spotify, Deezer…)<input type="text" id="eLink" value="${esc(s.link||'')}" placeholder="https://youtube.com/watch?v=…" inputmode="url"></label>
+        ${API_MODE&&isStaff()?`<label class="chk"><input type="checkbox" id="eCat" ${s.catalog?'checked':''}> <span><b>Cifra padrão</b> — fica no catálogo e aparece para todos os usuários</span></label>`:''}`}
+        <div class="etools"><button class="btn sm primary" data-act="e-blk" title="Incluir frase, convenção, passagem…">+ Incluir</button><span>Transpor:</span><button class="btn sm" data-act="e-tr" data-d="-1">− ½</button><button class="btn sm" data-act="e-tr" data-d="1">+ ½</button>${arr?'':'<button class="btn sm" data-act="e-detect">Detectar tom</button>'}<span style="flex:1"></span><span class="hint"><b>[Refrão]</b> = seção · <b>[C]letra</b> = ChordPro · <b>+ Incluir</b> = frase, convenção, passagem…</span></div>
         <textarea class="code" id="eContent" spellcheck="false" placeholder="[Verso]&#10;G              D&#10;  Cole aqui a letra com os acordes em cima&#10;Em             C&#10;  ou escreva [G]acordes [D]no meio da letra">${esc(s.content)}</textarea>
       </div>
       <div class="ecol"><div class="ptitle">Prévia</div><div class="sheet" id="ePrev" style="padding:0;font-size:15px"></div></div>
     </div></div>`;
-  const ids=['eTitle','eArtist','eKey','eBpm','eTags','eNotes','eLink','eContent'];
-  ids.forEach(id=>document.getElementById(id).addEventListener('input',()=>{e.dirty=true;readEdit();if(id==='eContent'||id==='eNotes')schedulePrev()}));
+  ['eTitle','eArtist','eKey','eBpm','eTags','eNotes','eLink','eContent','eCat'].forEach(id=>{const el=document.getElementById(id);if(el)el.addEventListener(el.type==='checkbox'?'change':'input',()=>{e.dirty=true;readEdit();if(id==='eContent'||id==='eNotes')schedulePrev()})});
   const ta=document.getElementById('eContent');
   ta.addEventListener('paste',ev=>{
     const t=ev.clipboardData&&ev.clipboardData.getData('text/plain');if(!t)return;
     ev.preventDefault();
-    const clean=ta.value.trim()?normalizeText(t):null;
-    if(clean!==null){ta.setRangeText(clean,ta.selectionStart,ta.selectionEnd,'end')}
+    if(ta.value.trim()||arr){ta.setRangeText(normalizeText(t),ta.selectionStart,ta.selectionEnd,'end')}
     else{ // editor vazio: limpeza completa e preenchimento dos campos
       const r=cleanImport(t);ta.value=r.content;
-      const fill=(id,v)=>{const el=document.getElementById(id);if(v&&!el.value.trim())el.value=v};
+      const fill=(id,v)=>{const el=document.getElementById(id);if(el&&v&&!el.value.trim())el.value=v};
       fill('eTitle',r.title);fill('eArtist',r.artist);fill('eKey',r.key);fill('eBpm',r.bpm);fill('eNotes',r.notes);
       if(r.key||r.title)toast('Cifra limpa'+(r.key?' · tom '+r.key:''));
     }
@@ -827,9 +935,12 @@ function renderEdit(){
   if(e.isNew) document.getElementById('eTitle').focus();
 }
 function readEdit(){
-  const s=S.edit.song,v=id=>document.getElementById(id).value;
-  s.title=v('eTitle');s.artist=v('eArtist');s.key=v('eKey').trim();s.bpm=v('eBpm').trim();
-  s.tags=v('eTags').split(',').map(t=>t.trim()).filter(Boolean);s.notes=v('eNotes');s.link=v('eLink').trim();s.content=v('eContent');
+  const s=S.edit.song,v=id=>{const el=document.getElementById(id);return el?el.value:null};
+  if(v('eTitle')!==null){s.title=v('eTitle');s.artist=v('eArtist');s.key=v('eKey').trim();s.bpm=v('eBpm').trim();
+    s.tags=v('eTags').split(',').map(t=>t.trim()).filter(Boolean)}
+  if(v('eLink')!==null)s.link=v('eLink').trim();
+  const c=document.getElementById('eCat');if(c)s.catalog=c.checked;
+  s.notes=v('eNotes');s.content=v('eContent');
 }
 let prevT=null;
 function schedulePrev(){clearTimeout(prevT);prevT=setTimeout(drawPrev,120)}
@@ -837,12 +948,50 @@ function drawPrev(){
   const p=document.getElementById('ePrev');if(!p)return;const s=S.edit.song;
   p.innerHTML=(s.notes?`<div class="note">${esc(s.notes)}</div>`:'')+(renderSheet(s.content,0,false,true)||'<p class="hint">A prévia aparece aqui.</p>');
 }
+function editReturn(ret){
+  S.edit=null;
+  if(ret==='viewer'&&S.viewer)S.view='viewer';else if(ret==='set'&&S.setId&&S.sets[S.setId])S.view='set';else S.view='library';
+  render();
+}
 async function leaveEdit(){
   const e=S.edit;
   if(e.dirty && !(await confirmBox('Descartar as alterações não salvas?','Descartar'))) return;
-  S.edit=null;
-  if(e.ret==='viewer' && S.viewer){S.view='viewer'}else S.view='library';
-  render();
+  editReturn(e.ret);
+}
+/* ---- Incluir bloco (frase, convenção, passagem…) ---- */
+function openBlk(){
+  const ta=document.getElementById('eContent');if(!ta)return;
+  const pos=ta.selectionStart,val=ta.value;
+  const ls=val.lastIndexOf('\n',pos-1)+1,leRaw=val.indexOf('\n',pos),le=leRaw<0?val.length:leRaw;
+  const cur=parseBlk(val.slice(ls,le));
+  const typ=cur?cur.type:'Convenção',known=BLK_TYPES.includes(typ);
+  const m=modal(`<div class="mh">${cur?'Editar':'Incluir'} na cifra</div><div class="mb">
+    <label class="f">Tipo<select id="bT">${BLK_TYPES.map(t=>`<option ${t===typ?'selected':''}>${t}</option>`).join('')}<option value="__o" ${known?'':'selected'}>Outro…</option></select></label>
+    <label class="f" id="bOw" style="${known?'display:none':''}">Nome do tipo<input type="text" id="bO" value="${known?'':esc(typ)}" placeholder="ex: Breque, Levada"></label>
+    <label class="f">Descrição<input type="text" id="bD" value="${esc(cur?cur.desc:'')}" placeholder="ex: todos param no 4º tempo; baixo sobe até o Em"></label>
+    <label class="f">Acordes ou notas (opcional)<input type="text" id="bM" value="${esc(cur?cur.music:'')}" placeholder="ex: G  D/F#  Em   ou   E  F#  G  A  B" style="font-family:'JetBrains Mono',monospace"></label>
+    <div class="ptitle">Prévia</div><div class="sheet" id="bP" style="padding:0;font-size:15px"></div>
+    <p class="hint">${cur?'Substitui o bloco da linha onde está o cursor.':'Entra antes da linha onde está o cursor. Os acordes e notas acompanham a transposição de tom.'}</p></div>
+    <div class="mf"><button class="btn" data-b="x">Cancelar</button><button class="btn primary" data-b="ok">${cur?'Salvar':'Incluir'}</button></div>`);
+  const q=id=>m.el.querySelector('#'+id);
+  const typeVal=()=>q('bT').value==='__o'?(q('bO').value.trim()||'Nota'):q('bT').value;
+  const line=()=>{const d=q('bD').value.trim(),mu=q('bM').value.trim();return '@'+typeVal().replace(/[:@]/g,'')+': '+d+(mu?' || '+mu:'')};
+  const pv=()=>{q('bP').innerHTML=renderSheet(line(),0,false,true)};
+  q('bT').addEventListener('change',()=>{q('bOw').style.display=q('bT').value==='__o'?'':'none';pv()});
+  ['bO','bD','bM'].forEach(id=>q(id).addEventListener('input',pv));pv();
+  setTimeout(()=>q('bD').focus(),30);
+  m.el.addEventListener('keydown',ev=>{if(ev.key==='Enter'&&ev.target.tagName==='INPUT'){ev.preventDefault();m.el.querySelector('[data-b=ok]').click()}});
+  m.el.addEventListener('click',ev=>{const b=ev.target.closest('[data-b]');if(!b)return;
+    if(b.dataset.b==='ok'){
+      if(!q('bD').value.trim()&&!q('bM').value.trim()){toast('Escreva uma descrição ou os acordes/notas.');return}
+      const L=line();
+      if(cur)ta.setRangeText(L,ls,le,'end');
+      else if(!val.trim())ta.value=L+'\n';
+      else ta.setRangeText(L+'\n',ls,ls,'end');
+      S.edit.dirty=true;readEdit();drawPrev();
+    }
+    m.close();ta.focus();
+  });
 }
 
 /* ---- Visualizador / Modo palco ---- */
@@ -855,11 +1004,12 @@ function releaseWake(){try{wake&&wake.release()}catch(e){}wake=null}
 function vEntry(i){
   const v=S.viewer;if(i<0||i>=v.ids.length)return null;
   const song=S.songs[v.ids[i]];if(!song)return {song:null,semis:0};
-  let semis=song.transpose||0;
-  if(v.ctx==='set'){const set=S.sets[v.setId];const it=set&&set.items[i];if(it)semis=it.transpose||0}
-  return {song,semis};
+  let semis=song.transpose||0,content=song.content,notes=song.notes||'',arr=false;
+  if(v.ctx==='set'){const set=S.sets[v.setId];const it=set&&set.items[i];
+    if(it){semis=it.transpose||0;if(it.content!=null){content=it.content;arr=true}if(it.notes!=null){notes=it.notes;arr=true}}}
+  return {song,semis,content,notes,arr};
 }
-function vSig(){const e=vEntry(S.viewer.idx);return e&&e.song?JSON.stringify([e.song.content,e.song.title,e.song.artist,e.song.key,e.song.notes,e.semis,S.viewer.ids.length]):'x'}
+function vSig(){const e=vEntry(S.viewer.idx);return e&&e.song?JSON.stringify([e.content,e.song.title,e.song.artist,e.song.key,e.notes,e.semis,S.viewer.ids.length]):'x'}
 let lastSig='';
 function refreshViewer(){
   const v=S.viewer;
@@ -879,7 +1029,7 @@ function renderViewer(keep){
   app.innerHTML=`<div class="viewer">
     <div class="vbar">
       <button class="btn ghost icon" data-act="v-back" title="Voltar (Esc)">←</button>
-      <div class="vtitle"><div class="t">${esc(s.title||'Sem título')}</div><div class="a">${esc(s.artist||'')}${s.bpm?` · ${esc(s.bpm)} bpm`:''}${set?` · ${esc(set.name)}`:''}</div></div>
+      <div class="vtitle"><div class="t">${esc(s.title||'Sem título')}${e.arr?' <span class="tag arr">versão do repertório</span>':''}${s.catalog&&!e.arr?' <span class="tag padrao">padrão</span>':''}</div><div class="a">${esc(s.artist||'')}${s.bpm?` · ${esc(s.bpm)} bpm`:''}${set?` · ${esc(set.name)}`:''}</div></div>
       <span class="vpos">${v.idx+1}/${v.ids.length}</span>
       <div class="grp" title="Tom ( [ e ] )"><button class="btn" data-act="v-tr" data-d="-1">−</button><span class="lbl">${s.key?esc(keyAt(s.key,e.semis)):(e.semis>0?'+':'')+e.semis}</span><button class="btn" data-act="v-tr" data-d="1">+</button>${e.semis?'<button class="btn" data-act="v-tr0" title="Tom original">↺</button>':''}</div>
       <div class="grp" title="Tamanho da letra"><button class="btn" data-act="v-font" data-d="-2">A−</button><button class="btn" data-act="v-font" data-d="2">A+</button></div>
@@ -887,11 +1037,11 @@ function renderViewer(keep){
       <div class="grp hide-sm"><button class="btn ${P.showChords?'on':''}" data-act="v-chords" title="Mostrar/ocultar acordes">Cifra</button><button class="btn ${P.cols?'on':''}" data-act="v-cols" title="Duas colunas">2 col</button></div>
       ${safeUrl(s.link||'')?`<a class="btn icon" href="${esc(safeUrl(s.link))}" target="_blank" rel="noopener" title="Abrir versão de referência">${/youtu/.test(s.link)?'▶ YT':/spotify/.test(s.link)?'♫ Spotify':/deezer/.test(s.link)?'♫ Deezer':'↗'}</a>`:''}
       <button class="btn icon" data-act="v-list" title="Lista (L)">☰</button>
-      ${e.song?'<button class="btn icon hide-sm" data-act="v-edit" title="Editar (E)">✎</button>':''}
+      ${e.song&&(v.ctx==='set'||canEditSong(e.song))?`<button class="btn icon hide-sm" data-act="v-edit" title="${v.ctx==='set'?'Editar a versão deste repertório (E)':'Editar (E)'}">✎</button>`:''}
       <button class="btn icon hide-sm" data-act="v-full" title="Tela cheia (F)">⛶</button>
     </div>
     <div class="vscroll" id="vscroll"><div class="sheet ${P.cols?'cols':''} ${P.showChords?'':'nochords'} ${keep?'':(v.dir==='next'?'anim-next':v.dir==='prev'?'anim-prev':'')}" style="font-size:${P.font}px">
-      ${s.notes?`<div class="note">${esc(s.notes)}</div>`:''}${renderSheet(s.content,e.semis,flat,P.showChords)}
+      ${e.notes?`<div class="note">${esc(e.notes)}</div>`:''}${renderSheet(e.content,e.semis,flat,P.showChords)}
     </div><div class="endpad"></div></div>
     <div class="vfoot">
       <button data-act="v-prev" ${prev?'':'disabled'}><span class="arr">‹</span><span style="min-width:0"><div class="lab">Anterior</div><div class="nm">${prev&&prev.song?esc(prev.song.title):'—'}</div></span></button>
@@ -924,7 +1074,7 @@ function changeSemis(d,reset){
   const v=S.viewer,e=vEntry(v.idx);if(!e||!e.song)return;
   const ns=reset?0:normSemis(e.semis+d);
   if(v.ctx==='set'){const set=clone(S.sets[v.setId]);set.items[v.idx].transpose=ns;persist(set,700)}
-  else{const s=clone(e.song);s.transpose=ns;persist(s,700)}
+  else{const s=clone(e.song);s.transpose=ns;if(canEditSong(e.song))persist(s,700);else{S.songs[s.id]=s;saveLocal()}}
   refreshViewer();
 }
 function startScroll(){
@@ -1041,7 +1191,7 @@ function cleanImport(raw){
       r.title=lead[0];r.artist=r.artist||lead[1]||'';out.splice(0,f);
     }
   }
-  r.content=out.join('\n').replace(/\n{3,}/g,'\n\n').trim();
+  r.content=out.join('\n').replace(/\n{3,}/g,'\n\n').replace(/^(\s*\n)+/,'').replace(/\s+$/,'');
   r.notes=notes.join(' · ');
   if(!r.key)r.key=detectKey(r.content);
   return r;
@@ -1051,11 +1201,126 @@ function startImported(r,extra){
   openEditor(s,'library',true);
 }
 
+/* ---- PDF → texto alinhado (pdf.js) ---- */
+const PDFJS_BASE='https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/build/';
+let pdfjsP=null;
+function loadPdfjs(){
+  if(!pdfjsP)pdfjsP=(async()=>{
+    const lib=await import(PDFJS_BASE+'pdf.min.mjs');
+    try{globalThis.pdfjsWorker=await import(PDFJS_BASE+'pdf.worker.min.mjs')}catch(e){}
+    lib.GlobalWorkerOptions.workerSrc=PDFJS_BASE+'pdf.worker.min.mjs';
+    return lib;
+  })().catch(e=>{pdfjsP=null;throw e});
+  return pdfjsP;
+}
+function median(a){if(!a.length)return 0;const b=[...a].sort((x,y)=>x-y);return b[b.length>>1]}
+function itemsToLines(items){
+  // items: {s,x,y,w,fs}; retorna linhas de texto com colunas preservadas
+  if(!items.length)return [];
+  const cw=median(items.filter(i=>i.s.trim().length>=2&&i.w>0).map(i=>i.w/i.s.length))||median(items.map(i=>i.fs*0.6))||5;
+  const minX=Math.min(...items.map(i=>i.x));
+  const sorted=[...items].sort((a,b)=>b.y-a.y||a.x-b.x);
+  const rows=[];
+  for(const it of sorted){const r=rows[rows.length-1];if(r&&Math.abs(r.y-it.y)<=Math.max(2,it.fs*0.45))r.items.push(it);else rows.push({y:it.y,fs:it.fs,items:[it]})}
+  const gaps=[];for(let i=1;i<rows.length;i++)gaps.push(rows[i-1].y-rows[i].y);
+  const lh=median(gaps.filter(g=>g>0))||12;
+  const out=[];
+  rows.forEach((r,i)=>{
+    if(i&&rows[i-1].y-r.y>lh*1.75)out.push('');
+    let line='';
+    for(const it of r.items.sort((a,b)=>a.x-b.x)){
+      const col=Math.max(0,Math.round((it.x-minX)/cw));
+      if(line.length<col)line+=' '.repeat(col-line.length);
+      else if(line.length&&!/\s$/.test(line)&&!/^\s/.test(it.s))line+=' ';
+      line+=it.s;
+    }
+    out.push(line.replace(/\s+$/,''));
+  });
+  return out;
+}
+// divide um trecho com espaços largos ("G        D" ou duas colunas na mesma linha) em pedaços com posição própria
+function splitWide(it){
+  if(!/\S\s{3,}\S/.test(it.s)||!it.w)return [it];
+  const cw=it.w/it.s.length,out=[];const re=/\s{3,}/g;let last=0,m;
+  const push=(a,b)=>{const t=it.s.slice(a,b);if(t.trim())out.push({...it,s:t,x:it.x+a*cw,w:t.length*cw})};
+  while((m=re.exec(it.s))){push(last,m.index);last=m.index+m[0].length}
+  push(last,it.s.length);
+  return out;
+}
+async function pdfToText(file,onProg){
+  const lib=await loadPdfjs();
+  const doc=await lib.getDocument({data:new Uint8Array(await file.arrayBuffer()),isEvalSupported:false}).promise;
+  const pages=[];let chars=0;
+  for(let p=1;p<=Math.min(doc.numPages,30);p++){
+    const page=await doc.getPage(p);const vw=page.getViewport({scale:1}).width;
+    const tc=await page.getTextContent();
+    const items=tc.items.filter(i=>i.str!==undefined&&i.str.trim()!==''&&Math.abs(i.transform[1])<0.01)
+      .map(i=>({s:i.str.replace(/\u00a0/g,' '),x:i.transform[4],y:i.transform[5],w:i.width,fs:Math.hypot(i.transform[2],i.transform[3])||10}))
+      .flatMap(splitWide);
+    chars+=items.reduce((n,i)=>n+i.s.trim().length,0);
+    // duas colunas? procura um corte vertical que nenhum texto atravessa
+    let split=null;
+    if(items.length>=8){
+      for(let sx=vw*0.38;sx<=vw*0.62;sx+=2){
+        const cross=items.some(i=>i.x<sx&&i.x+i.w>sx+1);if(cross)continue;
+        const L=items.filter(i=>i.x<sx).length,R=items.length-L;
+        if(L>items.length*0.2&&R>items.length*0.2){split=sx;break}
+      }
+    }
+    const cols=split?[items.filter(i=>i.x<split),items.filter(i=>i.x>=split)]:[items];
+    pages.push(cols.flatMap((c,k)=>k?['',...itemsToLines(c)]:itemsToLines(c)));
+    onProg&&onProg(p/doc.numPages);
+  }
+  if(chars<15){const e=new Error('semtexto');e.code='semtexto';throw e}
+  // tira linhas de site/número de página e o recuo comum de cada página
+  const junk=l=>!isChordLine(l)&&(/^\s*(p[áa]g(ina)?\.?\s*)?\d+\s*(\/|de)\s*\d+\s*$/i.test(l)||/(https?:\/\/|www\.)\S+/i.test(l.trim()));
+  pages.forEach((pg,k)=>{
+    pg=pg.filter(l=>!junk(l));
+    const ind=Math.min(...pg.filter(l=>l.trim()).map(l=>l.match(/^ */)[0].length),99);
+    pages[k]=ind&&ind<99?pg.map(l=>l.slice(Math.min(ind,l.match(/^ */)[0].length))):pg;
+  });
+  // remove cabeçalhos/rodapés repetidos em todas as páginas
+  if(pages.length>1){
+    const cnt={};pages.forEach(pg=>new Set(pg.map(l=>l.trim()).filter(Boolean)).forEach(l=>cnt[l]=(cnt[l]||0)+1));
+    pages.forEach((pg,k)=>pages[k]=pg.filter(l=>{const t=l.trim();return !t||cnt[t]<pages.length||isChordLine(l)||classify(l)==='sec'}));
+  }
+  let meta={};try{meta=(await doc.getMetadata()).info||{}}catch(e){}
+  const text=pages.map(pg=>pg.join('\n')).join('\n\n');
+  return {text,title:(meta.Title||'').replace(/\s*[-|–]\s*(cifra club|cifras?).*$/i,'').trim(),pages:doc.numPages};
+}
+async function importPdfs(files,box){
+  files=[...files].filter(f=>/\.pdf$/i.test(f.name)||f.type==='application/pdf');
+  if(!files.length)return false;
+  const res=[];
+  for(let k=0;k<files.length;k++){
+    const f=files[k];
+    if(box)box.innerHTML=`<div class="hint" style="margin-bottom:6px">Lendo “${esc(f.name)}” (${k+1}/${files.length})…</div><div class="bar"><i id="pdfBar"></i></div>`;
+    try{
+      const r=await pdfToText(f,p=>{const b=document.getElementById('pdfBar');if(b)b.style.width=Math.round(p*100)+'%'});
+      const c=cleanImport(r.text);
+      if(!c.title)c.title=r.title||titleCase(f.name.replace(/\.pdf$/i,'').replace(/[-_]+/g,' '));
+      res.push(c);
+    }catch(e){
+      const msg=e.code==='semtexto'?`“${f.name}” parece ser uma imagem escaneada (sem texto selecionável). Esse tipo de PDF ainda não pode ser lido — use um PDF gerado por site ou editor de texto.`
+        :/import|fetch|module|Failed/i.test(String(e&&e.message))?'Não consegui carregar o leitor de PDF. Verifique a internet e tente de novo.':`Não consegui ler “${f.name}”.`;
+      if(box)box.innerHTML=`<div class="info warn">${esc(msg)}</div>`;else toast(msg);
+      if(files.length===1)return true;
+    }
+  }
+  if(!res.length)return true;
+  const cat=API_MODE&&isStaff();
+  if(IMP&&IMP.m)IMP.m.close();
+  if(res.length===1){startImported(res[0],{catalog:cat});toast('PDF convertido — revise e salve.');return true}
+  res.forEach(r=>persist({...blankSong(),title:r.title,artist:r.artist,key:r.key,bpm:r.bpm,notes:r.notes,content:r.content,catalog:cat}));
+  S.view='library';render();toast(res.length+' cifras importadas dos PDFs.');
+  return true;
+}
+
 let IMP=null;
 function openImport(tab){
   IMP={tab,link:null};
   const m=modal(`<div class="mh">Importar música</div>
-    <div class="itabs"><button data-t="search">Buscar pelo nome</button><button data-t="link">Link / colar</button><button data-t="file">Arquivo</button><button data-t="audio">Acordes de um áudio</button></div>
+    <div class="itabs"><button data-t="search">Buscar pelo nome</button><button data-t="pdf">PDF</button><button data-t="link">Link / colar</button><button data-t="file">Arquivo</button><button data-t="audio">Acordes de um áudio</button></div>
     <div class="mb" id="impBody" style="padding-top:14px"></div>
     <div class="mf" id="impFoot"></div>`);
   m.el.querySelector('.mod').classList.add('wide');
@@ -1114,14 +1379,30 @@ function drawImport(tab){
       m.close();startImported(r);
     };
   }
+  else if(tab==='pdf'){
+    body.innerHTML=`<label class="drop" id="pdfDrop"><input type="file" id="pdfFiles" multiple accept=".pdf,application/pdf" hidden>
+      <div style="font-size:28px">📄</div><div><b>Escolha ou arraste o PDF da cifra</b></div><div class="hint">PDF baixado ou impresso do Cifra Club, de outro site ou de um editor de texto — vários de uma vez</div></label>
+      <div class="info">O NaNota lê o PDF aqui mesmo no seu aparelho, mantém os acordes alinhados em cima da letra, separa colunas, remove cabeçalho e rodapé e converte para o modelo de cifra do app. Com um PDF, ele abre no editor para você revisar${API_MODE&&isStaff()?' e já vem marcado como <b>cifra padrão</b>':''}.</div>
+      <div id="pdfOut"></div>`;
+    foot.innerHTML=`<button class="btn" data-i="cancel">Fechar</button>`;
+    foot.onclick=e=>{if(e.target.closest('[data-i]'))m.close()};
+    const inp=body.querySelector('#pdfFiles'),drop=body.querySelector('#pdfDrop'),out=body.querySelector('#pdfOut');
+    inp.addEventListener('change',()=>importPdfs(inp.files,out));
+    drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('over')});
+    drop.addEventListener('dragleave',()=>drop.classList.remove('over'));
+    drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('over');importPdfs(e.dataTransfer.files,out)});
+  }
   else if(tab==='file'){
-    body.innerHTML=`<label class="drop" id="impDrop"><input type="file" id="impFiles" multiple accept=".txt,.cho,.chordpro,.chopro,.crd,.pro,text/plain" hidden>
-      <div style="font-size:28px">⇣</div><div><b>Escolha ou arraste arquivos</b></div><div class="hint">.txt ou ChordPro (.cho, .chordpro, .crd, .pro) — vários de uma vez</div></label>
+    body.innerHTML=`<label class="drop" id="impDrop"><input type="file" id="impFiles" multiple accept=".txt,.pdf,.cho,.chordpro,.chopro,.crd,.pro,text/plain,application/pdf" hidden>
+      <div style="font-size:28px">⇣</div><div><b>Escolha ou arraste arquivos</b></div><div class="hint">.txt, PDF ou ChordPro (.cho, .chordpro, .crd, .pro) — vários de uma vez</div></label>
+      <div id="fileOut"></div>
       <div class="info">Com um arquivo, ele abre no editor para revisão. Com vários, todos vão direto para a biblioteca.</div>`;
     foot.innerHTML=`<button class="btn" data-i="cancel">Fechar</button>`;
     foot.onclick=e=>{if(e.target.closest('[data-i]'))m.close()};
     const inp=body.querySelector('#impFiles'),drop=body.querySelector('#impDrop');
     const handle=async files=>{
+      const pdfs=[...files].filter(f=>/\.pdf$/i.test(f.name)||f.type==='application/pdf');
+      if(pdfs.length){await importPdfs(pdfs,body.querySelector('#fileOut'));return}
       files=[...files].filter(f=>f.size<2e6);if(!files.length)return;
       const res=[];
       for(const f of files){const r=cleanImport(await f.text());if(!r.title)r.title=titleCase(f.name.replace(/\.[^.]+$/,'').replace(/[-_]+/g,' '));res.push(r)}
@@ -1353,6 +1634,7 @@ app.addEventListener('click',async ev=>{
     case 'new-song':openEditor(blankSong(),'library');break;
     case 'import-song':openImport('search');break;
     case 'import-audio':openImport('audio');break;
+    case 'import-pdf':openImport('pdf');break;
     case 'examples':EX.forEach(x=>persist({...blankSong(),...clone(x)}));render();toast('Exemplos adicionados.');break;
     case 'open-song':{const f=libFiltered();openViewer('library',f.map(s=>s.id),i);break}
     case 'new-set':{const t=new Date();const s={id:uid('r'),type:'set',name:'Novo repertório',date:t.toISOString().slice(0,10),items:[]};persist(s);S.setId=s.id;S.view='set';render();setTimeout(()=>{const n=document.getElementById('setName');if(n){n.focus();n.select()}},0);break}
@@ -1362,22 +1644,35 @@ app.addEventListener('click',async ev=>{
     case 'set-del':{const set=S.sets[S.setId];if(await confirmBox(`Excluir o repertório "${set.name}"? As músicas continuam na biblioteca.`)){removeItem(set);S.view='sets';render()}break}
     case 'it-tr':{const set=clone(S.sets[S.setId]);set.items[i].transpose=normSemis((set.items[i].transpose||0)+d);persist(set,700);renderSet();break}
     case 'it-mv':{const set=clone(S.sets[S.setId]);const j=i+d;if(j<0||j>=set.items.length)return;[set.items[i],set.items[j]]=[set.items[j],set.items[i]];persist(set);renderSet();break}
+    case 'it-arr':openArrangement(S.setId,i,'set');break;
     case 'it-rm':{const set=clone(S.sets[S.setId]);set.items.splice(i,1);persist(set);renderSet();break}
     // editor
     case 'e-cancel':leaveEdit();break;
-    case 'e-save':{readEdit();const s=S.edit.song;if(!s.title.trim()){toast('Dê um título à música.');document.getElementById('eTitle').focus();return}
+    case 'e-save':{readEdit();const E=S.edit,s=E.song;
+      if(E.mode==='arr'){
+        const set=clone(S.sets[E.setId]);const it=set&&set.items[E.idx];
+        if(!it){toast('Repertório não encontrado.');editReturn(E.ret);return}
+        if(s.content.trim()===(E.base.content||'').trim())delete it.content;else it.content=s.content;
+        if((s.notes||'')===(E.base.notes||''))delete it.notes;else it.notes=s.notes;
+        persist(set);toast(it.content!=null||it.notes!=null?'Versão do repertório salva.':'Igual à cifra padrão — nada a personalizar.');
+        editReturn(E.ret);return}
+      if(!s.title.trim()){toast('Dê um título à música.');document.getElementById('eTitle').focus();return}
       s.title=s.title.trim();s.artist=s.artist.trim();if(!s.key)s.key=detectKey(s.content);
-      persist(clone(s));const ret=S.edit.ret,isNew=S.edit.isNew;S.edit=null;
-      if(ret==='viewer'&&S.viewer){S.view='viewer';render()}
-      else if(isNew){const ids=libFiltered().map(x=>x.id);const k=ids.indexOf(s.id);if(k>=0)openViewer('library',ids,k);else{S.view='library';render()}}
-      else{S.view='library';render()}
+      persist(clone(s));const ret=E.ret,isNew=E.isNew;
+      if(isNew&&ret!=='viewer'){S.edit=null;const ids=libFiltered().map(x=>x.id);const k=ids.indexOf(s.id);if(k>=0)openViewer('library',ids,k);else editReturn('library')}
+      else editReturn(ret);
       toast('Música salva.');break}
+    case 'e-restore':{const E=S.edit;if(!(await confirmBox('Voltar para a cifra padrão neste repertório? As mudanças feitas aqui serão apagadas.','Restaurar')))return;
+      const set=clone(S.sets[E.setId]);const it=set.items[E.idx];delete it.content;delete it.notes;persist(set);toast('Cifra padrão restaurada.');editReturn(E.ret);break}
+    case 'e-base':{ev.preventDefault();const E=S.edit;if(E.dirty&&!(await confirmBox('Descartar as mudanças desta versão e abrir a cifra padrão?','Abrir padrão')))return;openEditor(E.base,E.ret);break}
+    case 'e-blk':openBlk();break;
     case 'e-del':{const s=S.songs[S.edit.song.id];if(s&&await confirmBox(`Excluir "${s.title}"? Ela também sai dos repertórios.`)){
       removeItem(s);Object.values(S.sets).forEach(set=>{if(set.items.some(x=>x.songId===s.id)){const c=clone(set);c.items=c.items.filter(x=>x.songId!==s.id);persist(c)}});
       S.edit=null;S.view='library';render()}break}
     case 'e-tr':{readEdit();const s=S.edit.song;const key=s.key||detectKey(s.content);const f=keyFlat(key,d);
-      s.content=transposeText(s.content,d,f);if(s.key)s.key=transposeChord(s.key,d,f);
-      document.getElementById('eContent').value=s.content;document.getElementById('eKey').value=s.key;S.edit.dirty=true;drawPrev();break}
+      s.content=transposeText(s.content,d,f);document.getElementById('eContent').value=s.content;
+      const ek=document.getElementById('eKey');if(ek&&s.key){s.key=transposeChord(s.key,d,f);ek.value=s.key}
+      S.edit.dirty=true;drawPrev();break}
     case 'e-detect':{readEdit();const k=detectKey(S.edit.song.content);if(k){S.edit.song.key=k;document.getElementById('eKey').value=k;S.edit.dirty=true;toast('Tom detectado: '+k+' (pelo primeiro acorde)')}else toast('Nenhum acorde encontrado.');break}
     // viewer
     case 'v-back':{const v=S.viewer;S.view=v.ctx==='set'?'set':'library';if(v.ctx==='set')S.setId=v.setId;try{document.fullscreenElement&&document.exitFullscreen()}catch(e){}render();break}
@@ -1393,7 +1688,7 @@ app.addEventListener('click',async ev=>{
     case 'v-list':{const dr=document.getElementById('drawer');dr.classList.toggle('open');if(dr.classList.contains('open')){drawDrawer();setTimeout(()=>{const q=document.getElementById('dq');q&&q.focus()},50)}break}
     case 'v-jump':{const dr=document.getElementById('drawer');dr.classList.remove('open');const cur=S.viewer.idx;if(i!==cur)goto(i,i>cur?'next':'prev');break}
     case 'v-open-other':{const v=S.viewer;const set=clone(S.sets[v.setId]);const song=S.songs[el.dataset.id];set.items.splice(v.idx+1,0,{songId:song.id,transpose:song.transpose||0});persist(set);v.ids=set.items.map(x=>x.songId);document.getElementById('drawer').classList.remove('open');goto(v.idx+1,'next');toast('Adicionada ao repertório após a atual.');break}
-    case 'v-edit':{const e=vEntry(S.viewer.idx);if(e&&e.song)openEditor(e.song,'viewer');break}
+    case 'v-edit':{const v=S.viewer,e=vEntry(v.idx);if(!e||!e.song)break;if(v.ctx==='set')openArrangement(v.setId,v.idx,'viewer');else if(canEditSong(e.song))openEditor(e.song,'viewer');break}
     case 'v-full':try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen()}catch(e){toast('Tela cheia indisponível aqui.')}break;
   }
 });
