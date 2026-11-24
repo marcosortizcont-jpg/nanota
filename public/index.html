@@ -178,7 +178,9 @@ textarea.code{font-family:'JetBrains Mono',monospace;font-size:14px;line-height:
 
 .np{position:fixed;inset:0;display:flex;flex-direction:column;background:var(--bg);z-index:10}
 .np-top .grp .btn{padding:5px 8px}
-@media (max-width:640px){.np-set{display:none}.np-top{gap:5px;padding:6px 8px}.np-h .np-t{font-size:17px}.np-strip button{padding:7px 10px}}
+@media (max-width:640px){.np-h{padding:6px 14px 2px;gap:8px}.np-h .np-t{font-size:15px!important}.np-h .np-a{font-size:12px}.np-h .np-n{font-size:12px;padding:1px 7px}.np-h .np-fit,.np-h .tag{display:none}.npsong .sheet{padding-left:14px;padding-right:14px}
+  .np-top .btn{padding:5px 9px;font-size:14px}.np-brand{font-size:16px}.np-strip button{padding:6px 10px;font-size:13px}.np-secs button{padding:5px 11px;font-size:12px}.np-foot button{padding:8px 12px}
+.np-set{display:none}.np-top{gap:5px;padding:6px 8px}.np-h .np-t{font-size:17px}.np-strip button{padding:7px 10px}}
 .np-top{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap}
 .np-brand{font-weight:800;letter-spacing:-.02em;font-size:18px;display:flex;align-items:center;gap:6px}
 .np-brand i{font-style:normal;background:var(--accent);color:var(--accentText);border-radius:6px;padding:1px 7px;font-size:13px}
@@ -199,11 +201,17 @@ textarea.code{font-family:'JetBrains Mono',monospace;font-size:14px;line-height:
 .np-end{text-align:center;color:var(--muted);font-size:13px;padding:22px 12px 40vh}
 .npsong .sheet{overflow-x:hidden}
 .npsong .np-fit{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:99px;padding:1px 7px}
-.np-h{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:12px;padding:10px 22px;background:color-mix(in srgb,var(--bg) 92%,transparent);backdrop-filter:blur(6px)}
+.np-h{display:flex;align-items:center;gap:12px;padding:10px 22px 4px}
+.np-h>div{min-width:0}
+.np-h .np-t,.np-h .np-a{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .np-h .np-n{font-family:'JetBrains Mono',monospace;font-weight:700;color:var(--accentText);background:var(--accent);border-radius:8px;padding:2px 9px;font-size:15px}
 .np-h .np-t{font-weight:700;font-size:20px;letter-spacing:-.01em}
 .np-h .np-a{font-size:13px;color:var(--muted)}
 .np-h .sp{flex:1}
+.np.focus .np-top,.np.focus .np-foot{display:none}
+.np.focus .np-strip{padding-top:max(6px,env(safe-area-inset-top));padding-right:52px}
+.np-unfocus{display:none;position:fixed;top:max(6px,env(safe-area-inset-top));right:8px;z-index:12;width:38px;height:34px;border-radius:10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font-size:16px;opacity:.85}
+.np.focus .np-unfocus{display:block}
 .np-foot{display:flex;border-top:1px solid var(--line);background:var(--panel)}
 .np-foot button{flex:1;background:none;border:none;padding:12px 14px;display:flex;align-items:center;gap:10px;min-width:0;text-align:left}
 .np-foot button+button{border-left:1px solid var(--line);justify-content:flex-end;text-align:right}
@@ -1425,7 +1433,7 @@ function renderNoPlay(){
   const np=S.np,set=S.sets[np.setId];if(!set){S.view='sets';return render()}
   const items=set.items;np.cur=Math.min(np.cur,Math.max(0,items.length-1));
   const P=k=>setPerm(set,k);
-  app.innerHTML=`<div class="np">
+  app.innerHTML=`<div class="np${S.prefs.npFocus?' focus':''}">
     <div class="np-top">
       <button class="btn ghost icon" data-act="np-exit" title="Sair (Esc)">←</button>
       <div class="np-brand"><i>▶</i>NoPlay</div><div class="np-set">${esc(set.name||'')}</div>
@@ -1433,8 +1441,9 @@ function renderNoPlay(){
       <div class="grp" title="Tamanho"><button class="btn" data-act="np-font" data-d="-2">A−</button><button class="btn" data-act="np-font" data-d="2">A+</button></div>
       <div class="grp" title="Rolagem automática (espaço)"><button class="btn ${scrollOn?'on':''}" data-act="v-scroll">${scrollOn?'❚❚':'▶'}</button><span class="lbl m">${S.prefs.speed}</span><button class="btn" data-act="v-speed" data-d="-1">−</button><button class="btn" data-act="v-speed" data-d="1">+</button></div>
       <button class="btn ${S.prefs.showChords?'on':''} hide-sm" data-act="np-chords">Cifra</button>
-      <button class="btn icon" data-act="v-full" title="Tela cheia (F)">⛶</button>
+      <button class="btn icon" data-act="np-focus" title="Tela cheia: só a cifra e as músicas (F)">⛶</button>
     </div>
+    <button class="np-unfocus" data-act="np-focus" title="Sair da tela cheia (F)">✕</button>
     <div class="np-strip" id="npSongs">${items.map((it,i)=>{const s=S.songs[it.songId];return `<button data-act="np-song" data-i="${i}" title="${i<9?'Tecla '+(i+1):''}"><span class="n">${i+1}</span><span class="t">${esc(s?s.title:'—')}</span>${s&&s.key?`<span class="k">${esc(keyAt(itemKey(it),it.transpose||0))}</span>`:''}</button>`}).join('')}</div>
     <div class="np-strip np-secs" id="npSecs"></div>
     <div class="np-body" id="vscroll">${items.map((_,i)=>npSongHTML(set,i)).join('')}<div class="np-end" id="npEnd"></div></div>
@@ -1475,7 +1484,7 @@ function npAnchors(){
 }
 function npSync(force){
   const np=S.np,body=document.getElementById('vscroll');if(!body)return;
-  const curEl=document.getElementById('nps-'+np.cur);const hd=curEl&&curEl.querySelector('.np-h');const y=body.scrollTop+(hd?hd.offsetHeight:56)+14;const cur=np.cur;
+  const curEl=document.getElementById('nps-'+np.cur);const hd=curEl&&curEl.querySelector('.np-h');const y=body.scrollTop+24;const cur=np.cur;
   const an=np.anchors[cur]||[];let sec=0;an.forEach((a,k)=>{if(a.el.offsetTop<=y)sec=k});
   const songChanged=force||np.lastSync!==cur;np.lastSync=cur;
   np.cur=cur;np.sec=sec;
@@ -1496,7 +1505,7 @@ function npSync(force){
 function npScrollTo(el,flash){
   const body=document.getElementById('vscroll');if(!body||!el)return;
   const song=el.closest('.npsong'),hd=song&&song.querySelector('.np-h');
-  const head=el.classList.contains('npsong')?0:(hd?hd.offsetHeight+8:56);
+  const head=el.classList.contains('npsong')?0:8; // cabeçalho da música não fica mais preso no topo
   body.scrollTop=Math.max(0,el.offsetTop-head);
   const fl=el.classList.contains('npsong')?el.querySelector('.np-h'):el;
   if(flash&&fl){fl.classList.remove('flash');void fl.offsetWidth;fl.classList.add('flash')}
@@ -1536,9 +1545,9 @@ function npKey(e){
     case ']':npTranspose(1);break;case '[':npTranspose(-1);break;
     case '+':case '=':document.querySelector('[data-act=np-font][data-d="2"]').click();break;
     case '-':document.querySelector('[data-act=np-font][data-d="-2"]').click();break;
-    case 'f':case 'F':document.querySelector('[data-act=v-full]').click();break;
+    case 'f':case 'F':document.querySelector('.np-top [data-act=np-focus]').click();break;
     case 'c':case 'C':document.querySelector('[data-act=np-chords]')?.click();break;
-    case 'Escape':exitNoPlay();break;
+    case 'Escape':if(document.querySelector('.np.focus'))document.querySelector('.np-unfocus').click();else exitNoPlay();break;
   }
 }
 
@@ -2673,6 +2682,10 @@ app.addEventListener('click',async ev=>{
     case 'set-print':{const set=S.sets[el.dataset.id];if(!set)break;
       const list=set.items.map(it=>{const song=S.songs[it.songId];if(!song)return null;return {song,semis:it.transpose||0,content:it.content!=null?it.content:song.content,notes:it.notes!=null?it.notes:(song.notes||''),key:itemKey(it)}}).filter(Boolean);
       printSheets(list,set);break}
+    case 'np-focus':{const np=document.querySelector('.np');if(!np)break;const on=!np.classList.contains('focus');np.classList.toggle('focus',on);S.prefs.npFocus=on;try{savePrefs()}catch(e){}
+      // onde o aparelho permite (Android, iPad, computador), também pede a tela cheia de verdade
+      try{const d=document;if(on&&d.documentElement.requestFullscreen&&!d.fullscreenElement)await d.documentElement.requestFullscreen({navigationUI:'hide'});else if(!on&&d.fullscreenElement)await d.exitFullscreen()}catch(e){}
+      setTimeout(()=>{npFit();npAnchors();npSync(true)},120);break}
     case 'v-full':try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen()}catch(e){toast('Tela cheia indisponível aqui.')}break;
   }
 });
