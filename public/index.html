@@ -238,6 +238,36 @@ textarea.code{font-family:'JetBrains Mono',monospace;font-size:14px;line-height:
 audio{width:100%}
 a.btn{text-decoration:none;display:inline-flex;align-items:center;gap:4px;color:var(--text)}
 
+/* ---- celular: escala mais compacta e linha do repertório em 2 andares ---- */
+@media (max-width:640px){
+  html,body{font-size:15px}
+  .btn{padding:6px 11px;font-size:14px;border-radius:9px}
+  .btn.sm{padding:4px 9px;font-size:13px}
+  .btn.icon{padding:5px 8px;min-width:32px}
+  .top .in{padding:8px 12px;gap:6px}
+  .logo{font-size:17px}.logo .dot{width:19px;height:19px;font-size:11px}
+  .tabs{margin-left:2px}.tabs button{padding:6px 8px;font-size:15px}
+  .wrap{padding:12px 10px 70px}
+  input[type=text],input[type=search],input[type=date],input[type=number],input[type=password],input[type=email],textarea,select{padding:8px 10px;font-size:16px}
+  .sethead{gap:8px;margin-bottom:10px}
+  .sethead input.name{font-size:18px;padding:8px 10px}
+  ul.list{gap:5px}
+  ul.list li{padding:9px 10px;gap:8px}
+  .li-a{font-size:12px}
+  .key{font-size:13px;padding:3px 7px;min-width:38px}
+  .grp .btn{padding:3px 8px}
+  .row{gap:6px}
+  /* música do repertório: nome em cima (inteiro), controles embaixo */
+  ul.list li.item{flex-wrap:wrap;row-gap:7px;align-items:center}
+  .item .li-main{flex:1 1 calc(100% - 60px);order:0}
+  .item .li-t{white-space:normal;line-height:1.25}
+  .item [data-act=it-arr]{order:1;margin-left:40px}
+  .item .grp,.item>.key{order:2}
+  .item .ctl{order:3;margin-left:auto}
+  .item .grip{font-size:16px}
+  /* botões do repertório: os menos usados só com ícone */
+  [data-act=set-print] .tx,[data-act=set-members] .tx,[data-act=set-logs] .tx,[data-act=set-add] .tx{display:none}
+}
 .auth{min-height:100vh;display:grid;place-items:center;padding:20px}
 .authcard{width:min(390px,100%);background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:26px 22px;display:flex;flex-direction:column;gap:12px}
 .authcard h2{margin:0;font-size:20px;text-align:center}
@@ -979,11 +1009,11 @@ function renderSet(){
     ${G&&!G.isOwner?`<div class="info" style="margin-bottom:12px">👥 Repertório de <b>${esc(G.ownerName||'outra pessoa')}</b>. Você pode: <b>${['list','transpose','songs','manage'].filter(P).map(k=>({list:'editar a lista',transpose:'mudar o tom',songs:'editar as cifras',manage:'gerenciar membros'})[k]).join(', ')||'só visualizar e tocar'}</b>.</div>`:''}
     <div class="sethead"><input type="text" class="name" id="setName" value="${esc(set.name||'')}" placeholder="Nome do repertório" ${ro}><input type="date" id="setDate" value="${esc(set.date||'')}" ${ro}></div>
     <div class="setactions">
-      <button class="btn" data-act="set-print" data-id="${set.id}" ${items.length?'':'disabled'} title="Imprimir todas as cifras do repertório (uma por página)">🖨 Imprimir</button>
+      <button class="btn" data-act="set-print" data-id="${set.id}" ${items.length?'':'disabled'} title="Imprimir todas as cifras do repertório (uma por página)">🖨<span class="tx"> Imprimir</span></button>
       <button class="btn primary" data-act="noplay" data-id="${set.id}" ${items.length?'':'disabled'} title="Repertório inteiro em uma tela, com troca rápida de música e de trecho">▶ NoPlay</button>
       <button class="btn" data-act="play-set" data-id="${set.id}" ${items.length?'':'disabled'} title="Uma música por vez">Palco</button>
-      ${P('list')?'<button class="btn" data-act="set-add">+ Adicionar músicas</button>':''}
-      ${API_MODE?`<button class="btn" data-act="set-members">👥 ${G&&G.isGroup?'Grupo ('+(G.members+1)+')':'Compartilhar em grupo'}</button><button class="btn" data-act="set-logs">📜 Histórico</button>`:''}
+      ${P('list')?'<button class="btn" data-act="set-add">+ <span class="tx">Adicionar </span>músicas</button>':''}
+      ${API_MODE?`<button class="btn" data-act="set-members" title="Compartilhar em grupo">👥<span class="tx"> ${G&&G.isGroup?'Grupo ('+(G.members+1)+')':'Compartilhar em grupo'}</span></button><button class="btn" data-act="set-logs" title="Histórico">📜<span class="tx"> Histórico</span></button>`:''}
       <div style="flex:1"></div>
       ${owner?'<button class="btn danger" data-act="set-del">Excluir</button>':'<button class="btn danger" data-act="set-leave">Sair do grupo</button>'}
     </div>
