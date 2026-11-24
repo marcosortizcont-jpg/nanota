@@ -1843,8 +1843,10 @@ function drawImport(tab){
       <label class="f">Cifra copiada da página<textarea class="code" id="impText" style="min-height:220px" spellcheck="false" placeholder="Abra a página, selecione a cifra (da primeira linha até o fim), copie e cole aqui.&#10;O NaNota remove o lixo da página, detecta tom, capotraste, título e artista."></textarea></label>`;
     foot.innerHTML=`<button class="btn" data-i="cancel">Cancelar</button><button class="btn primary" data-i="go">Importar e revisar</button>`;
     const u=body.querySelector('#impUrl'),txt=body.querySelector('#impText');
-    u.addEventListener('input',()=>{IMP.link=parseLink(u.value);drawLinkInfo()});
-    u.addEventListener('paste',()=>setTimeout(()=>{IMP.link=parseLink(u.value);drawLinkInfo();if(IMP.link&&IMP.link.kind!=='yt')txt.focus()},0));
+    let fT=null;const auto=()=>{clearTimeout(fT);IMP.fetch=null;IMP.link=parseLink(u.value);drawLinkInfo();
+      if(canFetch(IMP.link)&&!txt.value.trim())fT=setTimeout(fetchChartFromLink,500)};
+    u.addEventListener('input',auto);
+    u.addEventListener('paste',()=>setTimeout(()=>{auto();if(IMP.link&&IMP.link.kind!=='yt'&&!canFetch(IMP.link))txt.focus()},0));
     txt.addEventListener('paste',ev=>{const t=ev.clipboardData&&ev.clipboardData.getData('text/plain');if(!t)return;ev.preventDefault();txt.setRangeText(normalizeText(t),txt.selectionStart,txt.selectionEnd,'end')});
     setTimeout(()=>u.focus(),30);
     foot.onclick=e=>{const b=e.target.closest('[data-i]');if(!b)return;
@@ -1856,6 +1858,9 @@ function drawImport(tab){
       }
       const r=cleanImport(text);
       if(L){if(L.title)r.title=L.title;if(L.artist)r.artist=L.artist;r.link=L.url}
+      const F=IMP.fetch;if(F&&F.state==='ok'&&L&&F.url===L.url){const p=F.r;
+        if(p.title)r.title=p.title;if(p.artist)r.artist=p.artist;if(p.key)r.key=p.key;
+        if(p.notes)r.notes=[r.notes,p.notes].filter(Boolean).join(' · ')}
       m.close();startImported(r);
     };
   }
@@ -1950,7 +1955,25 @@ function drawLinkInfo(){
   }
   box.innerHTML=`<div class="chips"><span class="chip">Site: <b>${esc(L.site)}</b></span>${L.artist?`<span class="chip">Artista: <b>${esc(L.artist)}</b></span>`:''}${L.title?`<span class="chip">Música: <b>${esc(L.title)}</b></span>`:''}<a class="btn sm" href="${esc(L.url)}" target="_blank" rel="noopener">Abrir página ↗</a></div>
     ${L.lyricsOnly?'<div class="info warn" style="margin-top:8px">Esse site costuma ter só a letra. Dá para importar e escrever os acordes depois.</div>':''}
-    <div class="hint" style="margin-top:6px">Por segurança, o navegador não deixa o app ler outros sites sozinho: abra a página, copie a cifra e cole abaixo. Título, artista e link já vêm do endereço.</div>`;
+    ${canFetch(L)?`<div id="fetchBox" style="margin-top:8px">${fetchStatus()}</div>`:`<div class="hint" style="margin-top:6px">Por segurança, o navegador não deixa o app ler outros sites sozinho: abra a página, copie a cifra e cole abaixo. Título, artista e link já vêm do endereço.</div>`}`;
+  const fb=box.querySelector('[data-fetch]');if(fb)fb.onclick=()=>fetchChartFromLink();
+}
+/* busca a cifra pelo servidor do NaNota (só no site, com login) */
+const canFetch=L=>API_MODE&&L&&L.kind==='site'&&/cifraclub\.com\.br|cifras\.com\.br|ultimate-guitar\.com|e-chords\.com|letras\.(mus\.br|com)/.test(new URL(L.url).hostname);
+function fetchStatus(){const F=IMP.fetch||{};
+  if(F.state==='run')return '<div class="info">⏳ Buscando a cifra na página…</div>';
+  if(F.state==='ok')return `<div class="info">✅ Cifra trazida da página${F.r.key?` · tom <b>${esc(F.r.key)}</b>`:''}${F.r.notes?` · ${esc(F.r.notes)}`:''}. Confira abaixo e toque em <b>Importar e revisar</b>.</div>`;
+  if(F.state==='err')return `<div class="info warn">${esc(F.msg)} <button class="btn sm" data-fetch="1">Tentar de novo</button></div>`;
+  return '<button class="btn sm primary" data-fetch="1">⬇ Buscar a cifra deste link</button>'}
+async function fetchChartFromLink(){
+  const L=IMP.link;if(!canFetch(L))return;const url=L.url;
+  IMP.fetch={state:'run',url};drawLinkInfo();
+  try{const r=await api('POST','/api/fetch-chart',{url});
+    if(!IMP.link||IMP.link.url!==url)return;
+    IMP.fetch={state:'ok',url,r};
+    const txt=document.getElementById('impText');if(txt){txt.value=normalizeText(r.text);txt.dispatchEvent(new Event('input'))}
+  }catch(e){if(!IMP.link||IMP.link.url!==url)return;IMP.fetch={state:'err',url,msg:(e&&e.message)||'Não consegui buscar a cifra. Copie e cole.'}}
+  drawLinkInfo();
 }
 
 /* ---- Detecção de acordes por áudio (roda no navegador) ---- */

@@ -6,6 +6,7 @@ import { SESSION_DAYS, INVITE_DAYS, PBKDF2_ITER, MIN_PASSWORD, MAX_FAILS, LOCK_M
 import { groupRoutes, setsForUser } from './groups.js';
 import { financeRoutes, myBilling } from './finance.js';
 import { transcribeRoutes } from './transcribe.js';
+import { fetchChartRoute } from './fetchchart.js';
 
 /* ---------- rotas ---------- */
 async function api(req, env, url) {
@@ -128,6 +129,8 @@ async function api(req, env, url) {
 
   const tr = await transcribeRoutes(req, env, path, me);
   if (tr) return tr;
+  const fc = await fetchChartRoute(req, env, path, me);
+  if (fc) return fc;
   const g = await groupRoutes(req, env, url, path, m, me);
   if (g) return g;
   const f = await financeRoutes(req, env, url, path, m, me);
