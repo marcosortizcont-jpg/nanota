@@ -149,6 +149,7 @@ textarea{width:100%;min-height:120px;background:var(--panel2);color:var(--text);
       <button class="pri" id="btnMic">🎤 Ligar microfone</button>
       <button id="btnAcc" title="Sustenidos ou bemóis">♯ / ♭</button>
       <button id="btn7" title="Detectar também acordes com sétima">Com 7ª</button>
+      <button id="btnVoz" class="on" title="Ignora a melodia do cantor e segue só a harmonia dos instrumentos">🎤✖ Ignorar voz</button>
     </div>
     <div class="sl">Sensibilidade <input type="range" id="sens" min="1" max="10" value="6"></div>
     <div class="meter"><i id="lvl"></i><u id="gate"></u></div>
@@ -161,7 +162,7 @@ textarea{width:100%;min-height:120px;background:var(--panel2);color:var(--text);
     <textarea id="out" readonly></textarea>
   </div>
 
-  <p class="tip">Dica: deixe o celular perto do instrumento ou da caixa de som e ajuste a <b>sensibilidade</b> para a barra passar do risco só quando houver som. Reconhece acordes maiores, menores, sus4, diminutos, inversões pelo baixo (ex.: C/E) e, ativando <b>Com 7ª</b>, as sétimas. A previsão usa o campo harmônico do tom e aprende com o que já se repetiu na música — se souber o tom, escolha-o no campo <b>Tom</b>. Em banda completa com voz, o resultado é aproximado.</p>
+  <p class="tip">Dica: deixe o celular perto do instrumento ou da caixa de som e ajuste a <b>sensibilidade</b> para a barra passar do risco só quando houver som. Reconhece acordes maiores, menores, sus4, diminutos, inversões pelo baixo (ex.: C/E) e, ativando <b>Com 7ª</b>, as sétimas. Com <b>🎤✖ Ignorar voz</b> ligado (padrão), a melodia do cantor não muda o acorde: o NaNota segue só a harmonia dos instrumentos — desligue se estiver tocando um instrumento sozinho. A previsão usa o campo harmônico do tom e aprende com o que já se repetiu na música — se souber o tom, escolha-o no campo <b>Tom</b>. Em banda completa com voz, o resultado é aproximado.</p>
 </div>
 
 <script>
@@ -270,6 +271,7 @@ function stop(){
 }
 $('btnMic').onclick=()=>running?stop():start();
 $('btnAcc').onclick=()=>{flats=!flats;$('btnAcc').classList.toggle('on',flats);fillKeySel();renderAll();toast(flats?'Usando bemóis (Bb, Eb…)':'Usando sustenidos (A#, D#…)')};
+$('btnVoz').onclick=()=>{ignoreVoice=!ignoreVoice;$('btnVoz').classList.toggle('on',ignoreVoice);S=null;toast(ignoreVoice?'Ignorando a voz do cantor: segue só a harmonia.':'Usando todo o som (bom para instrumento sozinho).')};
 $('btn7').onclick=()=>{use7=!use7;$('btn7').classList.toggle('on',use7);TPL=templates();S=null};
 function resetSong(){vReset&&vReset();hist=[];t0=performance.now();keyAcc.fill(0);bassAcc.fill(0);keyFrames=0;current=null;autoKey=null;keyConf=0;preds=[];hits=0;tries=0;S=null;renderAll()}
 $('btnClear').onclick=resetSong;
@@ -312,12 +314,37 @@ function peaksOf(){
     const A=db[k-1],B=v,C=db[k+1],den=A-2*B+C,p=den?0.5*(A-C)/den:0;
     const f=(k+p)*SR/N;
     const fw=f<70?0.5:f<1500?1:1500/f; // peso por região
-    P.push({f,a:Math.pow(10,(B-0.25*(A-C)*p-mx)/20)*fw})}
+    // largura do pico a -6 dB (Hz): instrumento ≈ 9 Hz; voz com vibrato ≥ 14 Hz
+    const lim=B-6;let l=k,r=k;while(l>k0-W&&db[l]>lim&&k-l<40)l--;while(r<db.length-1&&db[r]>lim&&r-k<40)r++;
+    const fl=l+(db[l+1]-lim)/((db[l+1]-db[l])||1),fr=r-(db[r-1]-lim)/((db[r-1]-db[r])||1);
+    const wd=(fr-fl)*SR/N;
+    P.push({f,a:Math.pow(10,(B-0.25*(A-C)*p-mx)/20)*fw,wd})}
   // harmônicos de notas mais graves (3º = quinta, 5º = terça) atrapalham: diminui o peso deles
   P.sort((x,y)=>x.f-y.f);
+  if(ignoreVoice)suppressVoice(P);
   for(let j=0;j<P.length;j++)for(let i=0;i<j;i++){const h=P[j].f/P[i].f,hr=Math.round(h);
     if(hr>=2&&hr<=7&&Math.abs(h-hr)<0.018*hr&&P[i].a>P[j].a*0.25){if(hr===3||hr===5||hr===6||hr===7){P[j].a*=0.35}break}}
   return P;
+}
+/* A voz do cantor não define o acorde: notas com vibrato (picos largos) e a série de harmônicos
+   da melodia cantada quase não contam; quem manda é a harmonia (teclado, violão, guitarra, baixo). */
+let ignoreVoice=true,voiceF0=null;
+const WIDE=SR=>12.5*(SR/48000)*(16384/NFFT);
+function suppressVoice(P){
+  voiceF0=null;
+  // largura típica de nota de instrumento agora (as mais estreitas); bem mais largo que isso = vibrato de voz
+  const ws=P.filter(p=>p.f>150&&p.wd>0).map(p=>p.wd).sort((a,b)=>a-b);
+  const base=ws.length>=4?ws[Math.floor(ws.length*0.25)]:WIDE(SR)/2.5;
+  const lim=Math.max(base*1.75,WIDE(SR)*0.5);
+  P.forEach(p=>{p.wide=p.f>170&&p.wd>lim});
+  // melodia: o pico largo mais grave na faixa da voz que tem harmônicos também largos
+  let best=null,bs=0;
+  for(const p of P){if(!p.wide||p.f>1100)continue;let sc=p.a,n=0;
+    for(let h=2;h<=5;h++){const q=P.find(x=>Math.abs(x.f/(p.f*h)-1)<0.025);if(q){sc+=q.a;if(q.wide||q.wd>lim*0.9)n++}}
+    if(n>=1&&sc>bs){bs=sc;best=p}}
+  if(best){voiceF0=best.f;
+    for(const q of P){const h=q.f/best.f,hr=Math.round(h);if(hr>=1&&hr<=12&&Math.abs(h-hr)<0.025*hr)q.a*=0.06}}
+  for(const q of P)if(q.wide)q.a*=0.35;
 }
 function tick(){
   an.getFloatTimeDomainData(timeBuf);
@@ -343,7 +370,7 @@ function tick(){
   if(mx<=0)return fade();
   for(let i=0;i<12;i++)c[i]/=mx;
   let bmx=0,bp=-1;for(let i=0;i<12;i++){bassAcc[i]=bassAcc[i]*0.6+bass[i]*0.4;if(bassAcc[i]>bmx){bmx=bassAcc[i];bp=i}}
-  const a=onset?0.75:0.45;
+  const a=ignoreVoice?(onset?0.7:0.38):(onset?0.75:0.45);
   for(let i=0;i<12;i++){sm[i]=sm[i]*(1-a)+c[i]*a;keyAcc[i]+=c[i]}
   keyFrames++;
   const K=manualKey||autoKey,kc=K?keyChords(K):null;
@@ -352,11 +379,11 @@ function tick(){
   let bi=0,b2=-9,b1=-9;
   TPL.forEach((t,k)=>{
     let d=0;for(let i=0;i<12;i++)d+=sm[i]*t.v[i];
-    let s=d/(sn*t.n)-t.pen;
-    if(bp>=0&&bmx>0){if(bp===t.r)s+=0.07;else if(t.iv.some(x=>md(t.r+x)===bp))s+=0.015;else s-=0.04}
+    let s=d/(sn*t.n)-t.pen-(ignoreVoice&&t.suf==='sus4'?0.05:0);
+    if(bp>=0&&bmx>0){if(bp===t.r)s+=ignoreVoice?0.09:0.07;else if(t.iv.some(x=>md(t.r+x)===bp))s+=0.015;else s-=0.04}
     if(kc&&keyConf>0.3){const inK=kc.some(x=>x.r===t.r&&x.q===t.q&&!x.b);
       if(inK)s+=0.03;else if(keyConf>0.5&&!(t.q==='M'&&kc.some(x=>!x.b&&x.r===md(t.r+5))))s-=0.025}
-    S[k]=S[k]*(onset?0.3:0.55)+s*(onset?0.7:0.45);
+    const keep=ignoreVoice?(onset?0.32:0.6):(onset?0.3:0.55);S[k]=S[k]*keep+s*(1-keep);
     if(S[k]>b1){b2=b1;b1=S[k];bi=k}else if(S[k]>b2)b2=S[k];
   });
   $('conf').firstElementChild.style.width=Math.max(0,Math.min(100,(b1-0.55)/0.4*100))+'%';
