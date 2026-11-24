@@ -137,7 +137,8 @@ textarea.code{font-family:'JetBrains Mono',monospace;font-size:14px;line-height:
 .grp .btn.on{background:var(--accent);color:var(--accentText)}
 .grp .lbl{font-family:'JetBrains Mono',monospace;font-weight:700;min-width:46px;text-align:center;color:var(--chord);font-size:15px}
 .grp .lbl.m{color:var(--muted);font-size:12px;min-width:26px}
-.vscroll{flex:1;overflow:auto;position:relative;overscroll-behavior:contain}
+.vscroll{flex:1;overflow-y:auto;overflow-x:hidden;position:relative;overscroll-behavior:contain;touch-action:pan-y}
+.vscroll .sheet{overflow-x:hidden}
 .vscroll .endpad{height:45vh}
 .vfoot{display:flex;align-items:stretch;border-top:1px solid var(--line);background:var(--panel)}
 .vfoot button{flex:1;background:none;border:none;padding:12px 14px;display:flex;align-items:center;gap:10px;min-width:0;text-align:left}
@@ -195,7 +196,7 @@ textarea.code{font-family:'JetBrains Mono',monospace;font-size:14px;line-height:
 .np-secs{padding:6px 12px;background:color-mix(in srgb,var(--panel) 70%,var(--bg))}
 .np-secs button{padding:7px 14px;border-radius:99px;font-size:13px;font-weight:600}
 .np-secs button.on{background:var(--sec);border-color:var(--sec);color:#06121c}
-.np-body{flex:1;overflow:auto;position:relative;overscroll-behavior:contain;scroll-behavior:auto}
+.np-body{flex:1;overflow-y:auto;overflow-x:hidden;touch-action:pan-y;position:relative;overscroll-behavior:contain;scroll-behavior:auto}
 .npsong{padding:6px 0 26px;display:none}
 .npsong.cur{display:block}
 .np-end{text-align:center;color:var(--muted);font-size:13px;padding:22px 12px 40vh}
@@ -1306,7 +1307,7 @@ function renderViewer(keep){
     <div class="drawer ${wasOpen?'open':''}" id="drawer"></div>
   </div>`;
   drawDrawer();
-  bindSwipe();
+  bindSwipe();requestAnimationFrame(fitViewer);
   if(scrollOn) startScroll();
 }
 /* ---- impressão no estilo Cifra Club, com a marca NaNota ---- */
@@ -1392,12 +1393,7 @@ function toggleScroll(){
   if(scrollOn){stopScroll()}else{startScroll()}
   const b=document.querySelector('[data-act=v-scroll]');if(b){b.classList.toggle('on',scrollOn);b.textContent=scrollOn?'❚❚':'▶'}
 }
-function bindSwipe(){
-  const sc=document.getElementById('vscroll');if(!sc)return;let x0=null,y0=null,t0=0;
-  sc.addEventListener('touchstart',e=>{const t=e.touches[0];x0=t.clientX;y0=t.clientY;t0=Date.now()},{passive:true});
-  sc.addEventListener('touchend',e=>{if(x0===null)return;const t=e.changedTouches[0];const dx=t.clientX-x0,dy=t.clientY-y0;x0=null;
-    if(Date.now()-t0<600 && Math.abs(dx)>70 && Math.abs(dy)<60){dx<0?goto(S.viewer.idx+1,'next'):goto(S.viewer.idx-1,'prev')}},{passive:true});
-}
+function bindSwipe(){ /* troca de música só pelos botões (deslizar para o lado não troca mais) */ }
 function pageMove(dir){
   const sc=document.getElementById('vscroll');if(!sc)return;
   const atEnd=sc.scrollTop+sc.clientHeight>=sc.scrollHeight-sc.clientHeight*0.45-4;
@@ -1458,6 +1454,18 @@ function renderNoPlay(){
   if(scrollOn)startScroll();
 }
 /* cada cifra cabe na largura da tela: diminui a letra só o necessário (A−/A+ é o tamanho máximo) */
+function fitSheet(sh,max){
+  sh.style.fontSize=max+'px';
+  const avail=sh.clientWidth-2;if(avail<=0)return 100;
+  let w=sh.scrollWidth;
+  sh.querySelectorAll('.ch,.tab,.pair,.ly,.blk,.cp').forEach(x=>{const r=x.scrollWidth+(x.offsetLeft||0);if(r>w)w=r});
+  if(!(w>avail+6||sh.scrollWidth>sh.clientWidth+1))return 100;
+  sh.style.fontSize=Math.max(9,Math.floor(max*avail/w*10)/10)+'px';
+  for(let k=0;k<4&&sh.scrollWidth>sh.clientWidth+1&&parseFloat(sh.style.fontSize)>9;k++)sh.style.fontSize=(parseFloat(sh.style.fontSize)*0.95).toFixed(1)+'px';
+  return Math.round(parseFloat(sh.style.fontSize)/max*100);
+}
+function fitViewer(){const sh=document.querySelector('.viewer .vscroll .sheet');if(!sh||S.prefs.cols)return;fitSheet(sh,S.prefs.font)}
+let vFitT=null;window.addEventListener('resize',()=>{if(S.view!=='viewer')return;clearTimeout(vFitT);vFitT=setTimeout(fitViewer,150)});
 function npFit(){
   const max=S.prefs.font;
   document.querySelectorAll('.npsong .sheet').forEach(sh=>{
@@ -2669,7 +2677,7 @@ app.addEventListener('click',async ev=>{
     case 'v-next':goto(S.viewer.idx+1,'next');break;
     case 'v-tr':changeSemis(d);break;
     case 'v-tr0':changeSemis(0,true);break;
-    case 'v-font':S.prefs.font=Math.max(12,Math.min(44,S.prefs.font+d));savePrefs();{const sh=document.querySelector('.viewer .sheet');if(sh)sh.style.fontSize=S.prefs.font+'px'}break;
+    case 'v-font':S.prefs.font=Math.max(12,Math.min(44,S.prefs.font+d));savePrefs();{const sh=document.querySelector('.viewer .sheet');if(sh)sh.style.fontSize=S.prefs.font+'px';fitViewer()}break;
     case 'v-scroll':toggleScroll();break;
     case 'v-speed':S.prefs.speed=Math.max(1,Math.min(15,S.prefs.speed+d));savePrefs();{const l=el.parentElement.querySelector('.lbl');if(l)l.textContent=S.prefs.speed}break;
     case 'v-chords':S.prefs.showChords=!S.prefs.showChords;savePrefs();renderViewer(true);break;
