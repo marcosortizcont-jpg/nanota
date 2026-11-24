@@ -1293,7 +1293,7 @@ function renderViewer(keep){
       <div class="grp hide-sm"><button class="btn ${P.showChords?'on':''}" data-act="v-chords" title="Mostrar/ocultar acordes">Cifra</button><button class="btn ${P.cols?'on':''}" data-act="v-cols" title="Duas colunas">2 col</button></div>
       ${Object.entries(songLinks(s)).map(([k,u])=>`<a class="btn icon" href="${esc(u)}" target="_blank" rel="noopener" title="Ouvir no ${esc(k)}">${{youtube:'▶ YT',spotify:'♫ Spotify',deezer:'♫ Deezer',outro:'↗ Ouvir'}[k]}</a>`).join('')}
       <button class="btn icon" data-act="v-list" title="Lista (L)">☰</button>
-      ${e.song&&(v.ctx==='set'?setPerm(set,'songs'):canEditSong(e.song))?`<button class="btn icon hide-sm" data-act="v-edit" title="${v.ctx==='set'?'Editar a versão deste repertório (E)':'Editar (E)'}">✎</button>`:''}
+      ${e.song&&(v.ctx==='set'?setPerm(set,'songs'):canEditSong(e.song))?`<button class="btn icon" data-act="v-edit" title="${v.ctx==='set'?'Editar a versão deste repertório (E)':'Editar (E)'}">✎</button>`:''}
       <button class="btn icon" data-act="v-print" title="Imprimir / salvar PDF (P)">🖨</button>
       <button class="btn icon hide-sm" data-act="v-full" title="Tela cheia (F)">⛶</button>
     </div>
