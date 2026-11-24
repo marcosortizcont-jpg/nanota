@@ -1621,6 +1621,20 @@ function parseChordPro(t){
   }
   r.content=out.join('\n');return r;
 }
+/* dicionário de acordes no fim do PDF do Cifra Club: bloco final só de acordes, sem repetição,
+   em ordem alfabética e todos já usados na música → não é parte da música */
+function stripChordDictionary(out){
+  let end=out.length-1;while(end>=0&&!out[end].trim())end--;
+  let st=end;const block=[];
+  while(st>=0&&(!out[st].trim()||classify(out[st])==='ch')){if(out[st].trim())block.unshift(...out[st].trim().split(/\s+/));st--}
+  st++;
+  if(block.length<4)return;
+  const uniq=new Set(block).size===block.length;
+  const sorted=block.every((c,i)=>!i||block[i-1].localeCompare(c,'en')<=0);
+  const before=new Set(chordsIn(out.slice(0,st).join('\n')));
+  const used=block.filter(c=>before.has(c)).length>=block.length*0.8;
+  if(uniq&&sorted&&used)out.splice(st);
+}
 function cleanImport(raw){
   let t=normalizeText(raw);
   let r={title:'',artist:'',key:'',bpm:'',notes:'',content:''};
@@ -1646,6 +1660,7 @@ function cleanImport(raw){
       r.title=lead[0];r.artist=r.artist||lead[1]||'';out.splice(0,f);
     }
   }
+  stripChordDictionary(out);
   r.content=out.join('\n').replace(/\n{3,}/g,'\n\n').replace(/^(\s*\n)+/,'').replace(/\s+$/,'');
   r.notes=notes.join(' · ');
   if(!r.key)r.key=detectKey(r.content);
@@ -1660,13 +1675,19 @@ function startImported(r,extra){
 /* ---- PDF → texto alinhado (pdf.js) ---- */
 const PDFJS_BASE='https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/build/';
 let pdfjsP=null;
-function loadPdfjs(){
-  if(!pdfjsP)pdfjsP=(async()=>{
-    const lib=await import(PDFJS_BASE+'pdf.min.mjs');
-    try{globalThis.pdfjsWorker=await import(PDFJS_BASE+'pdf.worker.min.mjs')}catch(e){}
-    lib.GlobalWorkerOptions.workerSrc=PDFJS_BASE+'pdf.worker.min.mjs';
+// versão "legacy" do pdf.js: compatível com Safari/iPhone (a moderna usa recursos que o Safari não tem)
+const PDFJS_LEGACY=PDFJS_BASE.replace('/build/','/legacy/build/');
+let pdfjsL=null,PDF_USE_LEGACY=/iP(hone|ad|od)|Macintosh.*Safari(?!.*Chrome)/.test(navigator.userAgent)&&!/CriOS|FxiOS|EdgiOS|Chrome/.test(navigator.userAgent);
+function loadPdfjs(legacy){
+  const base=legacy?PDFJS_LEGACY:PDFJS_BASE;
+  const make=()=>(async()=>{
+    const lib=await import(base+'pdf.min.mjs');
+    try{globalThis.pdfjsWorker=await import(base+'pdf.worker.min.mjs')}catch(e){}
+    lib.GlobalWorkerOptions.workerSrc=base+'pdf.worker.min.mjs';
     return lib;
-  })().catch(e=>{pdfjsP=null;throw e});
+  })();
+  if(legacy){if(!pdfjsL)pdfjsL=make().catch(e=>{pdfjsL=null;throw e});return pdfjsL}
+  if(!pdfjsP)pdfjsP=make().catch(e=>{pdfjsP=null;throw e});
   return pdfjsP;
 }
 function median(a){if(!a.length)return 0;const b=[...a].sort((x,y)=>x-y);return b[b.length>>1]}
@@ -1720,7 +1741,14 @@ function splitWide(it){
   return out;
 }
 async function pdfToText(file,onProg){
-  const lib=await loadPdfjs();
+  try{return await pdfToTextWith(file,onProg,PDF_USE_LEGACY)}
+  catch(e){if(e&&e.code==='semtexto')throw e;
+    // falhou: tenta a outra versão do leitor (moderna ↔ compatível)
+    try{const r=await pdfToTextWith(file,onProg,!PDF_USE_LEGACY);PDF_USE_LEGACY=!PDF_USE_LEGACY;return r}
+    catch(e2){if(e2&&e2.code==='semtexto')throw e2;e.detail=String((e&&e.message)||e).slice(0,160);throw e}}
+}
+async function pdfToTextWith(file,onProg,legacy){
+  const lib=await loadPdfjs(legacy);
   const doc=await lib.getDocument({data:new Uint8Array(await file.arrayBuffer()),isEvalSupported:false}).promise;
   const pages=[];let chars=0;
   for(let p=1;p<=Math.min(doc.numPages,30);p++){
@@ -1782,7 +1810,7 @@ async function importPdfs(files,box){
       res.push(c);
     }catch(e){
       const msg=e.code==='semtexto'?`“${f.name}” parece ser uma imagem escaneada (sem texto selecionável). Esse tipo de PDF ainda não pode ser lido — use um PDF gerado por site ou editor de texto.`
-        :/import|fetch|module|Failed/i.test(String(e&&e.message))?'Não consegui carregar o leitor de PDF. Verifique a internet e tente de novo.':`Não consegui ler “${f.name}”.`;
+        :/import|fetch|module|Failed/i.test(String(e&&e.message))?'Não consegui carregar o leitor de PDF. Verifique a internet e tente de novo.':`Não consegui ler “${f.name}”.${e&&e.detail?` (detalhe técnico: ${e.detail})`:''}`;
       if(box)box.innerHTML=`<div class="info warn">${esc(msg)}</div>`;else toast(msg);
       if(files.length===1)return true;
     }
