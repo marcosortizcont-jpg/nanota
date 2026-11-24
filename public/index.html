@@ -1676,6 +1676,14 @@ function startImported(r,extra){
 const PDFJS_BASE='https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/build/';
 let pdfjsP=null;
 // versão "legacy" do pdf.js: compatível com Safari/iPhone (a moderna usa recursos que o Safari não tem)
+/* Safari/iPhone ainda não sabe percorrer fluxos de dados com "for await": o leitor de PDF precisa disso */
+(function(){const RS=typeof ReadableStream!=='undefined'&&ReadableStream.prototype;if(!RS||RS[Symbol.asyncIterator])return;
+  RS.values=function(opt){const reader=this.getReader(),keep=!!(opt&&opt.preventCancel);
+    return {next(){return reader.read()},
+      return(v){try{if(!keep)reader.cancel(v)}catch(e){}try{reader.releaseLock()}catch(e){}return Promise.resolve({done:true,value:v})},
+      throw(e){try{reader.cancel(e)}catch(_){}try{reader.releaseLock()}catch(_){}return Promise.reject(e)},
+      [Symbol.asyncIterator](){return this}}};
+  RS[Symbol.asyncIterator]=RS.values;})();
 const PDFJS_LEGACY=PDFJS_BASE.replace('/build/','/legacy/build/');
 let pdfjsL=null,PDF_USE_LEGACY=/iP(hone|ad|od)|Macintosh.*Safari(?!.*Chrome)/.test(navigator.userAgent)&&!/CriOS|FxiOS|EdgiOS|Chrome/.test(navigator.userAgent);
 function loadPdfjs(legacy){
